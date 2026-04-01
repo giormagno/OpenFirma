@@ -54,6 +54,26 @@ Avvia la GUI usando una build gia compilata:
 .\run.ps1
 ```
 
+## Packaging Windows
+
+Per generare una cartella Windows eseguibile con runtime incluso:
+
+```powershell
+.\package.ps1
+```
+
+L'output viene creato qui:
+
+```text
+release\JavaSign\JavaSign.exe
+```
+
+Se vuoi rigenerare tutto da zero:
+
+```powershell
+.\package.ps1 -Clean
+```
+
 ## Uso operativo
 
 1. collega token o smart card al PC;
