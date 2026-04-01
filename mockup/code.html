@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>JavaSign | Precision Document Signing</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary-fixed-dim": "#00e2ee",
+              "tertiary": "#005e9e",
+              "tertiary-fixed-dim": "#4da8fe",
+              "on-primary": "#cdfbff",
+              "primary-dim": "#00595e",
+              "on-secondary-container": "#40555f",
+              "background": "#f5f7f7",
+              "primary": "#00666c",
+              "surface-dim": "#d0d5d6",
+              "surface-container-highest": "#d9dede",
+              "tertiary-fixed": "#6fb5ff",
+              "inverse-on-surface": "#9b9d9e",
+              "inverse-primary": "#00f1fe",
+              "on-surface-variant": "#595c5c",
+              "surface-container-low": "#eff1f1",
+              "on-background": "#2c2f30",
+              "tertiary-dim": "#00528b",
+              "on-primary-fixed-variant": "#006065",
+              "error-container": "#fb5151",
+              "on-tertiary": "#edf3ff",
+              "outline": "#747778",
+              "on-secondary": "#e4f5ff",
+              "on-primary-fixed": "#004145",
+              "on-primary-container": "#00555a",
+              "secondary-container": "#cfe6f2",
+              "primary-container": "#00f1fe",
+              "primary-fixed": "#00f1fe",
+              "tertiary-container": "#6fb5ff",
+              "inverse-surface": "#0b0f0f",
+              "secondary-fixed-dim": "#c1d8e4",
+              "on-tertiary-fixed-variant": "#003b66",
+              "surface-tint": "#00666c",
+              "secondary": "#495f69",
+              "on-surface": "#2c2f30",
+              "on-error-container": "#570008",
+              "error": "#b31b25",
+              "on-secondary-fixed-variant": "#495f69",
+              "on-secondary-fixed": "#2d424c",
+              "surface-bright": "#f5f7f7",
+              "surface-variant": "#d9dede",
+              "surface-container": "#e5e9e9",
+              "secondary-fixed": "#cfe6f2",
+              "surface-container-high": "#dfe3e3",
+              "surface": "#f5f7f7",
+              "outline-variant": "#abadae",
+              "surface-container-lowest": "#ffffff",
+              "error-dim": "#9f0519",
+              "on-error": "#ffefee",
+              "on-tertiary-container": "#003258",
+              "on-tertiary-fixed": "#001930",
+              "secondary-dim": "#3e535c"
+            },
+            fontFamily: {
+              "headline": ["Space Grotesk"],
+              "body": ["Space Grotesk"],
+              "label": ["Space Grotesk"]
+            },
+            borderRadius: {"DEFAULT": "0px", "lg": "0px", "xl": "0px", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .signature-cyan-glow {
+            background: linear-gradient(45deg, #00f1fe 0%, #00666c 100%);
+            box-shadow: 0 0 20px rgba(0, 241, 254, 0.3);
+        }
+        .blueprint-grid {
+            background-image: linear-gradient(to right, rgba(171, 173, 174, 0.1) 1px, transparent 1px),
+                              linear-gradient(to bottom, rgba(171, 173, 174, 0.1) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        .ghost-border {
+            border: 1px solid rgba(171, 173, 174, 0.2);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface font-body text-on-surface selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopAppBar -->
+<header class="bg-[#f5f7f7] dark:bg-slate-900 border-b border-slate-200/20 dark:border-slate-800/20 w-full top-0 sticky z-50">
+<div class="flex justify-between items-center px-4 py-3 w-full">
+<div class="flex items-center gap-3">
+<div class="text-cyan-500 dark:text-cyan-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors p-2 scale-95 active:opacity-80 transition-all">
+<span class="material-symbols-outlined" data-icon="architecture">architecture</span>
+</div>
+<h1 class="text-xl font-bold tracking-tighter text-slate-900 dark:text-white">JavaSign</h1>
+</div>
+<div class="flex items-center gap-6">
+<nav class="hidden md:flex gap-8">
+<a class="text-cyan-600 dark:text-cyan-400 font-['Space_Grotesk'] font-medium tracking-tight text-sm uppercase" href="#">Sign</a>
+<a class="text-slate-500 dark:text-slate-400 font-['Space_Grotesk'] font-medium tracking-tight text-sm uppercase hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" href="#">History</a>
+<a class="text-slate-500 dark:text-slate-400 font-['Space_Grotesk'] font-medium tracking-tight text-sm uppercase hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" href="#">Settings</a>
+</nav>
+<div class="w-8 h-8 rounded-full bg-surface-container-highest flex items-center justify-center overflow-hidden border border-outline-variant/20">
+<img alt="user profile" class="w-full h-full object-cover" data-alt="Professional headshot of a software architect in a clinical, brightly lit office with neutral tones" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDLXa2zCTS86jyzxva2DNWUNRq2ty_vzTIVqA5omCT8Z-7_iJJlJgqNW6EuhX09VXOIGSZwkw8nbAbRcw4ner-bkV7qiGrafRRS2KIlkOVBIgtjWQuKHkvHHP_TKSXQg7lpZPh9jJRGI1JIyX-QHbyQAREszAqaBDAqIaK5YAdugnDyPmz4FcfokpJSOHdBUnUTZ2CBPni58MjJRELtskOATeCa_JsJly10M-GZtO2ROrZbF2UNTkRuHUuls5c4Wau6Q9SIGe3oRLo"/>
+</div>
+</div>
+</div>
+</header>
+<main class="min-h-screen blueprint-grid pt-8 pb-24 px-4 md:px-8 max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
+<!-- Left Column: Controls & Upload -->
+<div class="lg:col-span-5 space-y-6">
+<!-- Section Header -->
+<div class="space-y-1">
+<span class="text-[10px] font-bold uppercase tracking-widest text-primary">System Ready</span>
+<h2 class="text-3xl font-bold tracking-tight text-on-surface">Initialize Payload</h2>
+</div>
+<!-- Certificate Selection -->
+<div class="bg-surface-container-low p-6 ghost-border relative group">
+<div class="absolute top-0 left-0 w-1 h-full bg-primary opacity-0 group-hover:opacity-100 transition-opacity"></div>
+<label class="block text-[10px] font-bold uppercase tracking-widest text-on-surface-variant mb-4">Verification Certificate</label>
+<div class="relative">
+<select class="w-full bg-transparent border-b border-outline-variant py-2 pr-10 focus:outline-none focus:border-primary transition-all font-medium text-sm appearance-none cursor-pointer">
+<option>RSA_PROD_ENCRYPT_2024.jks</option>
+<option>DEV_SANDBOX_AUTH.p12</option>
+<option>LEGACY_ROOT_CA_01.pem</option>
+</select>
+<span class="material-symbols-outlined absolute right-0 bottom-2 pointer-events-none text-outline-variant" data-icon="expand_more">expand_more</span>
+</div>
+<div class="mt-4 flex items-center gap-2">
+<div class="w-1.5 h-1.5 bg-primary"></div>
+<span class="text-[10px] text-outline uppercase font-medium">Valid until Dec 2025 • SHA-256</span>
+</div>
+</div>
+<!-- Drag and Drop Zone -->
+<div class="bg-surface-container-lowest ghost-border aspect-square w-full flex flex-col items-center justify-center p-8 border-dashed border-2 border-outline-variant/30 hover:border-primary/50 transition-colors group cursor-pointer relative overflow-hidden">
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+<span class="material-symbols-outlined text-5xl text-outline-variant group-hover:text-primary transition-colors mb-4" data-icon="draw">draw</span>
+<p class="text-sm font-bold uppercase tracking-widest text-on-surface">Initialize Payload</p>
+<p class="text-[10px] text-outline-variant uppercase mt-2">Drop .JAVA or .JAR files here</p>
+<div class="mt-8 px-4 py-2 bg-surface-container-high ghost-border group-hover:bg-primary group-hover:text-on-primary transition-all">
+<span class="text-[10px] font-bold uppercase tracking-tighter">Browse Directory</span>
+</div>
+</div>
+</div>
+<!-- Right Column: Staged Assets & Execution -->
+<div class="lg:col-span-7 flex flex-col h-full space-y-6">
+<!-- Asset List Container -->
+<div class="flex-grow bg-surface-container-lowest ghost-border flex flex-col">
+<div class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Staged Assets (03)</span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-primary">7.2 MB Total</span>
+</div>
+<div class="divide-y divide-outline-variant/10 overflow-y-auto">
+<!-- File Item 1 -->
+<div class="p-4 flex items-center gap-4 hover:bg-surface-container-low transition-colors group">
+<div class="w-10 h-10 bg-surface-container flex items-center justify-center ghost-border">
+<span class="material-symbols-outlined text-primary text-xl" data-icon="terminal">terminal</span>
+</div>
+<div class="flex-grow min-w-0">
+<h4 class="text-sm font-bold truncate tracking-tight">MainCoreModule.java</h4>
+<p class="text-[10px] text-outline-variant uppercase">Modified 2m ago • 24.5 KB</p>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-highest transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm text-on-surface-variant" data-icon="visibility">visibility</span>
+</button>
+<button class="p-2 hover:bg-error-container/20 transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm text-error" data-icon="delete">delete</span>
+</button>
+</div>
+<div class="w-1 h-4 bg-primary"></div>
+</div>
+<!-- File Item 2 -->
+<div class="p-4 flex items-center gap-4 hover:bg-surface-container-low transition-colors group">
+<div class="w-10 h-10 bg-surface-container flex items-center justify-center ghost-border">
+<span class="material-symbols-outlined text-primary text-xl" data-icon="box">package</span>
+</div>
+<div class="flex-grow min-w-0">
+<h4 class="text-sm font-bold truncate tracking-tight">security-bridge-v4.jar</h4>
+<p class="text-[10px] text-outline-variant uppercase">Verified Local • 6.8 MB</p>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-highest transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm text-on-surface-variant" data-icon="visibility">visibility</span>
+</button>
+<button class="p-2 hover:bg-error-container/20 transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm text-error" data-icon="delete">delete</span>
+</button>
+</div>
+<div class="w-1 h-4 bg-primary opacity-40"></div>
+</div>
+<!-- File Item 3 -->
+<div class="p-4 flex items-center gap-4 hover:bg-surface-container-low transition-colors group">
+<div class="w-10 h-10 bg-surface-container flex items-center justify-center ghost-border">
+<span class="material-symbols-outlined text-primary text-xl" data-icon="code">code</span>
+</div>
+<div class="flex-grow min-w-0">
+<h4 class="text-sm font-bold truncate tracking-tight">AppManifest.xml</h4>
+<p class="text-[10px] text-outline-variant uppercase">Modified 5h ago • 1.2 KB</p>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-2 hover:bg-surface-container-highest transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm text-on-surface-variant" data-icon="visibility">visibility</span>
+</button>
+<button class="p-2 hover:bg-error-container/20 transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm text-error" data-icon="delete">delete</span>
+</button>
+</div>
+<div class="w-1 h-4 bg-primary"></div>
+</div>
+</div>
+<!-- Empty State Filler -->
+<div class="flex-grow flex items-center justify-center opacity-20 pointer-events-none">
+<div class="text-center">
+<p class="text-[8px] font-bold uppercase tracking-[0.3em]">System.End_of_List</p>
+</div>
+</div>
+</div>
+<!-- Execution Panel -->
+<div class="bg-surface-container-highest ghost-border p-6 space-y-6">
+<div class="grid grid-cols-2 gap-4">
+<div class="space-y-1">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Auth Hash</span>
+<code class="text-[10px] block truncate text-primary font-mono">0x7F4B2...A92D</code>
+</div>
+<div class="space-y-1 text-right">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Timestamp</span>
+<p class="text-[10px] text-on-surface font-medium">2024.05.22 14:02:11 GMT</p>
+</div>
+</div>
+<!-- Primary Action Button -->
+<button class="w-full signature-cyan-glow h-14 flex items-center justify-center gap-3 active:scale-[0.98] transition-all relative group">
+<div class="absolute inset-0 border border-primary-fixed-dim/50 group-hover:scale-105 transition-transform duration-300"></div>
+<span class="text-on-primary-fixed font-bold tracking-[0.2em] uppercase text-sm">Sign</span>
+<span class="material-symbols-outlined text-on-primary-fixed" data-icon="verified_user">verified_user</span>
+</button>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 w-full bg-[#f5f7f7] dark:bg-slate-900 border-t border-slate-200/20 dark:border-slate-800/20 z-50 flex justify-around items-center px-6 pb-4 pt-2">
+<a class="flex flex-col items-center justify-center text-cyan-500 dark:text-cyan-400 border-t-2 border-cyan-500 pt-2 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="draw">draw</span>
+<span class="font-['Space_Grotesk'] text-[10px] font-bold uppercase tracking-widest mt-1">Sign</span>
+</a>
+<a class="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 pt-2 hover:text-cyan-400 transition-colors active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+<span class="font-['Space_Grotesk'] text-[10px] font-bold uppercase tracking-widest mt-1">History</span>
+</a>
+<a class="flex flex-col items-center justify-center text-slate-400 dark:text-slate-500 pt-2 hover:text-cyan-400 transition-colors active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="font-['Space_Grotesk'] text-[10px] font-bold uppercase tracking-widest mt-1">Settings</span>
+</a>
+</nav>
+<!-- Background Blueprint Image Overlay (Subtle) -->
+<div class="fixed inset-0 pointer-events-none opacity-[0.03] z-[-1]">
+<img alt="blueprint pattern" class="w-full h-full object-cover grayscale" data-alt="Technical architectural blueprint of a complex machine with intricate grid lines and engineering notations" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBubsKnd9I1Ex790mQcVw1RqaWpyTFSandXry2R7CJ2FttJRIZTzZAweKaNjwn8lPp7DjCBrNA8_48CnKgVYBylumEPdVj7wFB3VjNgjdkUa4K--4TNotARPkdk2Spu1OHsQbV-V9nYig0nYaYUyQ_CtZWW2XgekUXtikt5ZdG_7DzurESEvWsmF2yOTgjCF6w8PcH6zGcWNo-FN8cbZexw9hKbp3QQMY59R94FRf-NrE7_RzjZFD7wXjbUvZNQIhFGUhGYvSnta30"/>
+</div>
+</body></html>
