@@ -4,105 +4,145 @@
   <img src="design/icon/logo.svg" alt="OpenFirma logo" width="140" />
 </p>
 
-Applicazione desktop Java per la firma digitale locale e la verifica di documenti firmati, con interfaccia Windows ottimizzata per certificati presenti nello store `Windows-MY`.
+Applicazione desktop Windows per firma digitale e verifica documenti, con supporto a:
 
-OpenFirma gestisce due modalita di firma dalla stessa home page:
+- firma in busta `P7M`
+- firma `PDF` con firma grafica visibile
+- firma grafica automatica su ogni pagina del PDF
+- verifica dei file firmati
+- apertura del documento firmato o del contenuto verificato
 
-- `Busta P7M`
-- `PDF` con firma grafica visibile in stile PAdES
+## Schermata iniziale
 
-## Cosa fa
+![Schermata iniziale](screen/01_INIZIALE.png)
 
-OpenFirma copre il flusso operativo completo lato desktop:
+## Funzionalita complete
 
-- selezione certificato di firma da `Windows-MY`;
-- drag-and-drop dei file da firmare;
-- gestione di una coda firme dinamica;
-- firma in busta `.p7m`;
-- firma PDF con viewer integrato, zoom e posizionamento grafico;
-- opzione di firma grafica su ogni pagina del PDF;
-- verifica di file firmati P7M e PDF;
-- ispezione dei firmatari e del documento firmato;
-- gestione dei conflitti nella cartella di destinazione;
-- consultazione log applicativi da popup dedicato;
-- packaging Windows con runtime incluso.
+### Firma P7M
 
-## Funzionalita disponibili
-
-### Home page
-
-- layout a colonna singola;
-- larghezza minima finestra `650px`;
-- blocco certificato con popup dettagli;
-- blocco `FILE DA FIRMARE` con drag-and-drop e link `NAVIGA TRA LE CARTELLE`;
-- blocco `Coda delle firme` con altezza dinamica;
-- scelta `Tipo firma` direttamente accanto alla coda;
-- selezione cartella di destinazione;
-- pulsanti `Firma file`, `Verifica`, `LOG`.
-
-### Firma in busta P7M
-
-- firma CMS allegata con estensione `.p7m`;
-- supporto multi-file;
-- verifica locale automatica a fine firma;
-- svuotamento automatico della coda se la firma termina correttamente.
+- firma CMS allegata con estensione `.p7m`
+- supporto multi-file
+- verifica locale automatica al termine della firma
+- gestione conflitti nella cartella di destinazione
 
 ### Firma PDF
 
-- popup dedicato con preview PDF integrata;
-- selezione dei documenti tramite tab;
-- zoom `+` e `-`;
-- pulsante `Adatta larghezza` per vedere l'intera larghezza della pagina nel viewer;
-- posizionamento grafico della firma con drag del riquadro;
-- cambio pagina del documento corrente;
-- ripristino della posizione di default;
-- opzione `Firma su ogni pagina`.
+- viewer PDF integrato nel popup di firma
+- selezione documenti tramite tab
+- zoom `+` e `-`
+- pulsante `Adatta larghezza`
+- posizionamento grafico della firma con drag del riquadro
+- cambio pagina del PDF
+- reset della posizione della firma
+
+### Firma multipagina automatica
+
+- opzione `Firma su ogni pagina`
+- la firma grafica viene replicata su tutte le pagine del PDF nello stesso punto relativo scelto dall'utente
 
 ### Verifica file firmati
 
-- popup iniziale con drag-and-drop nello stesso stile della home;
-- supporto multi-file;
-- verifica esplicita tramite pulsante `Verifica`;
-- risultati organizzati in tab, una per file;
-- elenco firmatari;
-- riepilogo date e metadati principali;
-- pulsante `Visualizza documento` per aprire il contenuto verificato.
+- verifica sia di file `P7M` sia di file `PDF`
+- supporto multi-file
+- risultati organizzati in schede
+- elenco firmatari
+- data creazione
+- data firma
+- metadati del documento verificato
 
-### Gestione conflitti in output
+### Apertura di file firmati
 
-Prima della firma, OpenFirma verifica se nella cartella di destinazione esiste gia il file che sta per produrre.
+- pulsante `Visualizza documento` nel popup finale di verifica
+- apertura del contenuto con l'applicazione predefinita del sistema
 
-Se trova un conflitto, apre un popup con:
+### Gestione conflitti output
+
+Se il file di destinazione esiste gia, OpenFirma propone:
 
 - `SOVRASCRIVI`
 - `ANNULLA`
 - `VERIFICA FILE`
 - `RINOMINA`
 
-Con `VERIFICA FILE` viene aperto un popup di ispezione del file gia presente in output, con:
-
-- nome file;
-- data creazione;
-- data firma;
-- firmatari.
-
-Con `RINOMINA` viene aperto un secondo popup che consente di definire un nuovo nome per il file in uscita e, con `OK`, proseguire la firma.
+Il flusso `VERIFICA FILE` permette di ispezionare il file gia presente in output prima di decidere come procedere.
 
 ### Log applicativi
 
-- il pannello log non e fisso nella home;
-- il pulsante `LOG` apre un popup con il tracciamento operativo dell'app;
-- i log registrano caricamento certificati, gestione file, firma, verifica e errori.
+- pulsante `LOG` in testata
+- popup dedicato con il riepilogo operativo della sessione
 
-## Requisiti
+## Versione Windows gia avviabile
 
-- Windows;
-- Java 21 installato e disponibile in `PATH`;
-- token USB, smart card o certificato gia disponibile in `Windows-MY` per l'uso GUI;
-- middleware del dispositivo correttamente installato, se richiesto;
-- accesso internet al primo build per scaricare le dipendenze mancanti.
+Nel repository e inclusa anche la versione Windows gia pronta in:
 
-## Avvio rapido
+```text
+release/OpenFirma/
+```
+
+Eseguibile principale:
+
+```text
+release/OpenFirma/OpenFirma.exe
+```
+
+Questa versione e gia avviabile su Windows e include il runtime Java necessario.
+
+### Come usarla correttamente su un PC Windows
+
+1. Copia l'intera cartella `release/OpenFirma` sul PC di destinazione.
+2. Non copiare solo `OpenFirma.exe`: servono anche le sottocartelle `app` e `runtime`.
+3. Installa l'eventuale middleware del token o della smart card.
+4. Verifica che il certificato sia visibile nello store `Windows-MY`.
+5. Avvia `OpenFirma.exe`.
+
+### Requisiti per la versione gia pronta
+
+- Windows
+- certificato di firma disponibile in `Windows-MY` oppure dispositivo correttamente esposto al sistema
+- middleware del token installato, se richiesto
+
+Per la sola versione in `release/OpenFirma` non e necessario installare Java separatamente, perche il runtime e gia incluso.
+
+## Flussi operativi GUI
+
+### 1. Firma in busta P7M
+
+1. Avvia OpenFirma.
+2. Seleziona il certificato nel blocco `Seleziona Certificato`.
+3. Carica uno o piu file in `FILE DA FIRMARE`.
+4. Controlla `Cartella destinazione`.
+5. In `Tipo firma` scegli `Busta P7M`.
+6. Premi `Firma file`.
+7. Gestisci eventuali conflitti di output.
+8. Attendi il completamento della firma.
+
+### 2. Firma PDF con firma grafica
+
+1. Avvia OpenFirma.
+2. Seleziona il certificato.
+3. Carica uno o piu PDF.
+4. In `Tipo firma` scegli `PDF`.
+5. Premi `Firma file`.
+6. Nel popup usa le tab per passare da un documento all'altro.
+7. Regola la preview con zoom o `Adatta larghezza`.
+8. Posiziona il riquadro firma.
+9. Se necessario attiva `Firma su ogni pagina`.
+10. Premi `Avvia firma`.
+
+### 3. Verifica di file firmati
+
+1. Premi `Verifica`.
+2. Carica uno o piu file firmati con drag-and-drop o selezione manuale.
+3. Premi `Verifica`.
+4. Consulta i risultati nelle schede finali.
+5. Usa `Visualizza documento` se vuoi aprire il contenuto.
+
+### 4. Consultazione log
+
+1. Premi `LOG`.
+2. Leggi il tracciamento operativo della sessione.
+
+## Build da sorgente
 
 Compila senza avviare la GUI:
 
@@ -116,7 +156,7 @@ Compila e avvia la GUI:
 .\build.ps1
 ```
 
-Avvia la GUI passando dalla build standard:
+Avvia usando la build locale:
 
 ```powershell
 .\run.ps1
@@ -124,7 +164,7 @@ Avvia la GUI passando dalla build standard:
 
 ## Packaging Windows
 
-Genera la distribuzione Windows con runtime incluso:
+Rigenera la distribuzione Windows:
 
 ```powershell
 .\package.ps1
@@ -142,96 +182,35 @@ Output atteso:
 release\OpenFirma\OpenFirma.exe
 ```
 
-## Flussi operativi GUI
+## Uso CLI tecnico
 
-### 1. Firma in busta P7M
+La CLI resta utile per test e automazione del backend.
 
-Usa questo flusso quando devi produrre un file `.p7m`.
-
-1. Avvia OpenFirma.
-2. Seleziona o aggiorna il certificato nel blocco `Seleziona Certificato`.
-3. Carica uno o piu file nel blocco `FILE DA FIRMARE`.
-4. Verifica la `Cartella destinazione`.
-5. Nel menu `Tipo firma`, scegli `Busta P7M`.
-6. Controlla la `Coda delle firme`.
-7. Premi `Firma file`.
-8. Se esiste un conflitto in output, scegli tra `SOVRASCRIVI`, `ANNULLA`, `VERIFICA FILE` o `RINOMINA`.
-9. Attendi il popup di avanzamento.
-10. A fine firma, la coda viene svuotata automaticamente.
-
-### 2. Firma PDF con firma grafica
-
-Usa questo flusso quando devi firmare direttamente un PDF con firma visibile.
-
-1. Avvia OpenFirma.
-2. Seleziona il certificato di firma.
-3. Carica uno o piu file PDF.
-4. Nel menu `Tipo firma`, scegli `PDF`.
-5. Premi `Firma file`.
-6. Nel popup PDF:
-7. Seleziona il documento tramite tab.
-8. Usa `+`, `-` o `Adatta larghezza` per regolare la preview.
-9. Posiziona il riquadro della firma nel punto desiderato.
-10. Se necessario, attiva `Firma su ogni pagina`.
-11. Passa agli altri documenti tramite tab e ripeti il posizionamento.
-12. Premi `Avvia firma`.
-13. Gestisci eventuali conflitti output dai popup dedicati.
-
-### 3. Verifica di un file firmato
-
-Usa questo flusso per controllare firme gia prodotte, P7M o PDF.
-
-1. Premi `Verifica`.
-2. Nel popup iniziale trascina i file oppure selezionali tramite il link.
-3. Premi `Verifica`.
-4. Consulta il risultato finale nelle tab:
-5. verifica generale;
-6. elenco firmatari;
-7. data creazione;
-8. data firma;
-9. pulsante `Visualizza documento`.
-
-### 4. Consultazione log
-
-1. Premi `LOG`.
-2. Leggi il tracciamento operativo della sessione.
-3. Chiudi il popup quando hai terminato.
-
-## Uso CLI
-
-La CLI e utile per test, automazione o uso tecnico del backend.
-
-### Elencare i certificati
-
-Store Windows:
-
-```powershell
-java --add-modules jdk.crypto.cryptoki,jdk.crypto.mscapi -cp "out;lib\*" it.firmadigitale.AppLauncher --mode WINDOWS_MY --list
-```
-
-Archivio PKCS#12:
-
-```powershell
-java --add-modules jdk.crypto.cryptoki,jdk.crypto.mscapi -cp "out;lib\*" it.firmadigitale.AppLauncher --mode PKCS12 --resource ".\testdata\signer.p12" --secret "changeit" --list
-```
-
-### Firmare da CLI in P7M
-
-```powershell
-java --add-modules jdk.crypto.cryptoki,jdk.crypto.mscapi -cp "out;lib\*" it.firmadigitale.AppLauncher --mode PKCS12 --resource ".\testdata\signer.p12" --secret "changeit" --out ".\output" --file ".\testdata\sample.txt"
-```
-
-### Mostrare l'help CLI
+Mostra help:
 
 ```powershell
 java --add-modules jdk.crypto.cryptoki,jdk.crypto.mscapi -cp "out;lib\*" it.firmadigitale.AppLauncher --help
 ```
 
-## Struttura del progetto
+Elenca identita da archivio `PKCS12`:
+
+```powershell
+java --add-modules jdk.crypto.cryptoki,jdk.crypto.mscapi -cp "out;lib\*" it.firmadigitale.AppLauncher --mode PKCS12 --resource ".\testdata\signer.p12" --secret "changeit" --list
+```
+
+Firma di test `P7M`:
+
+```powershell
+java --add-modules jdk.crypto.cryptoki,jdk.crypto.mscapi -cp "out;lib\*" it.firmadigitale.AppLauncher --mode PKCS12 --resource ".\testdata\signer.p12" --secret "changeit" --out ".\output" --file ".\testdata\sample.txt"
+```
+
+## Struttura progetto
 
 ```text
 design/icon/                         asset SVG della UI
 mockup/                              riferimenti di design
+release/OpenFirma/                   build Windows pronta all'uso
+screen/                              screenshot documentazione
 src/main/java/it/firmadigitale/      sorgenti Java
 build.ps1                            build locale
 package.ps1                          packaging Windows
@@ -242,12 +221,11 @@ README.md                            documentazione progetto
 
 ## Note tecniche
 
-- la GUI e centrata sullo store `Windows-MY`;
-- il backend mantiene supporto tecnico anche a `PKCS12` e `PKCS11`;
-- la verifica locale P7M usa CMS/CAdES embedded;
-- la verifica locale PDF legge le firme presenti nel documento;
-- la modalita PDF usa preview integrata e firma visibile;
-- il packaging genera un'app Windows autonoma con runtime Java incluso.
+- la GUI principale usa lo store `Windows-MY`
+- il backend supporta anche `PKCS12` e `PKCS11`
+- la modalita `PDF` usa firma visibile con preview integrata
+- la verifica supporta sia `P7M` sia `PDF`
+- il repository include anche una release Windows gia pronta
 
 ## Licenza
 

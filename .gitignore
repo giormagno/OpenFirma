@@ -2,7 +2,9 @@ out/
 lib/
 output/
 test-output/
-release/
+release/*
+!release/OpenFirma/
+!release/OpenFirma/**
 package-work/
 
 testdata/
