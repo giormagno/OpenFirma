@@ -8,6 +8,8 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $libDir = Join-Path $root "lib"
 $srcDir = Join-Path $root "src\main\java"
 $outDir = Join-Path $root "out"
+$iconSourceDir = Join-Path $root "design\icon"
+$iconTargetDir = Join-Path $outDir "design\icon"
 
 New-Item -ItemType Directory -Force -Path $libDir | Out-Null
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -24,6 +26,10 @@ $dependencies = @(
     @{
         File = "bcutil-jdk18on-1.78.1.jar"
         Url = "https://repo1.maven.org/maven2/org/bouncycastle/bcutil-jdk18on/1.78.1/bcutil-jdk18on-1.78.1.jar"
+    },
+    @{
+        File = "svg-salamander-1.1.5.5.jar"
+        Url = "https://repo1.maven.org/maven2/io/github/blackears/svg-salamander/1.1.5.5/svg-salamander-1.1.5.5.jar"
     }
 )
 
@@ -44,6 +50,11 @@ $classpath = (($dependencies | ForEach-Object { Join-Path $libDir $_.File }) -jo
 
 Write-Host "Compilo i sorgenti..."
 javac -encoding UTF-8 -cp $classpath -d $outDir $javaFiles
+
+if (Test-Path $iconSourceDir) {
+    New-Item -ItemType Directory -Force -Path $iconTargetDir | Out-Null
+    Copy-Item (Join-Path $iconSourceDir "*.svg") $iconTargetDir -Force
+}
 
 Write-Host "Build completato. Classi in $outDir"
 

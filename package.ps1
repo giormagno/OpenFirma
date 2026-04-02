@@ -10,7 +10,7 @@ $libDir = Join-Path $root "lib"
 $releaseDir = Join-Path $root "release"
 $packageWorkDir = Join-Path $root "package-work"
 $inputDir = Join-Path $packageWorkDir "input"
-$appJar = Join-Path $inputDir "JavaSign.jar"
+$appJar = Join-Path $inputDir "OpenFirma.jar"
 
 function Get-JdkBinDir {
     if ($env:JAVA_HOME) {
@@ -58,6 +58,7 @@ $classPath = @(
     Join-Path $inputDir "bcpkix-jdk18on-1.78.1.jar"
     Join-Path $inputDir "bcprov-jdk18on-1.78.1.jar"
     Join-Path $inputDir "bcutil-jdk18on-1.78.1.jar"
+    Join-Path $inputDir "svg-salamander-1.1.5.5.jar"
 ) -join ";"
 
 $moduleDeps = & $jdepsExe --multi-release 21 --ignore-missing-deps --print-module-deps --class-path $classPath $appJar
@@ -66,14 +67,14 @@ $runtimeModules = ($moduleDeps.Split(",") + @("jdk.crypto.cryptoki", "jdk.crypto
 Write-Host "Modulo runtime inclusi: $runtimeModules"
 Write-Host "Genero l'app Windows..."
 
-Remove-Item (Join-Path $releaseDir "JavaSign") -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $releaseDir "OpenFirma") -Recurse -Force -ErrorAction SilentlyContinue
 
 & $jpackageExe `
     --type app-image `
-    --name "JavaSign" `
+    --name "OpenFirma" `
     --dest $releaseDir `
     --input $inputDir `
-    --main-jar "JavaSign.jar" `
+    --main-jar "OpenFirma.jar" `
     --main-class "it.firmadigitale.AppLauncher" `
     --vendor "Codex" `
     --app-version "0.1.0" `
@@ -81,7 +82,7 @@ Remove-Item (Join-Path $releaseDir "JavaSign") -Recurse -Force -ErrorAction Sile
     --add-modules $runtimeModules `
     --java-options "--add-modules=jdk.crypto.cryptoki,jdk.crypto.mscapi"
 
-$exePath = Join-Path $releaseDir "JavaSign\JavaSign.exe"
+$exePath = Join-Path $releaseDir "OpenFirma\OpenFirma.exe"
 if (-not (Test-Path $exePath)) {
     throw "Packaging completato senza trovare l'eseguibile atteso: $exePath"
 }

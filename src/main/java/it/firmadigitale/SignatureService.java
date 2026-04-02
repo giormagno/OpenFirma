@@ -4,6 +4,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Instant;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
@@ -30,7 +32,9 @@ import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.ASN1Sequence;
+import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
+import org.bouncycastle.asn1.cms.Time;
 import org.bouncycastle.asn1.ess.ESSCertIDv2;
 import org.bouncycastle.asn1.ess.SigningCertificateV2;
 import org.bouncycastle.asn1.nist.NISTObjectIdentifiers;
@@ -95,32 +99,48 @@ public final class SignatureService {
         }
 
         Files.createDirectories(outputDirectory);
-        LoadedKeyStore loadedKeyStore = loadKeyStore(config);
-        String effectiveAlias = resolveAlias(loadedKeyStore.keyStore(), config.mode(), alias);
-        PrivateKey privateKey = (PrivateKey) loadedKeyStore.keyStore().getKey(effectiveAlias, loadedKeyStore.keyPassword());
-        if (privateKey == null) {
-            throw new IllegalStateException("Chiave privata non disponibile per alias " + effectiveAlias);
-        }
-
-        Certificate[] chain = loadedKeyStore.keyStore().getCertificateChain(effectiveAlias);
-        if (chain == null || chain.length == 0) {
-            throw new IllegalStateException("Catena certificati non disponibile per alias " + effectiveAlias);
-        }
-
-        X509Certificate signerCertificate = (X509Certificate) chain[0];
-        List<X509Certificate> certificateChain = new ArrayList<>();
-        for (Certificate certificate : chain) {
-            certificateChain.add((X509Certificate) certificate);
-        }
+        LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
 
         List<Path> results = new ArrayList<>();
         for (Path inputFile : inputFiles) {
             if (!Files.exists(inputFile)) {
                 throw new IllegalArgumentException("File non trovato: " + inputFile);
             }
-            results.add(signSingleFile(privateKey, loadedKeyStore.signatureProviderName(), signerCertificate, certificateChain, inputFile, outputDirectory));
+            Path outputFile = outputDirectory.resolve(inputFile.getFileName().toString() + ".p7m");
+            results.add(signSingleFile(
+                    signingMaterial.privateKey(),
+                    signingMaterial.signatureProviderName(),
+                    signingMaterial.signerCertificate(),
+                    signingMaterial.certificateChain(),
+                    inputFile,
+                    outputFile
+            ));
         }
         return results;
+    }
+
+    public Path signFile(SignatureConfig config, String alias, Path inputFile, Path outputFile) throws Exception {
+        if (inputFile == null || !Files.exists(inputFile)) {
+            throw new IllegalArgumentException("File non trovato: " + inputFile);
+        }
+        if (outputFile == null) {
+            throw new IllegalArgumentException("Il file di output non e valido.");
+        }
+
+        Path parent = outputFile.toAbsolutePath().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
+        LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
+        return signSingleFile(
+                signingMaterial.privateKey(),
+                signingMaterial.signatureProviderName(),
+                signingMaterial.signerCertificate(),
+                signingMaterial.certificateChain(),
+                inputFile,
+                outputFile
+        );
     }
 
     @SuppressWarnings("unchecked")
@@ -147,13 +167,42 @@ public final class SignatureService {
         return true;
     }
 
+    @SuppressWarnings("unchecked")
+    public SignedFileInspection inspectSignedFile(Path signedFile) throws Exception {
+        if (!Files.exists(signedFile)) {
+            throw new IllegalArgumentException("File non trovato: " + signedFile);
+        }
+
+        BasicFileAttributes attributes = Files.readAttributes(signedFile, BasicFileAttributes.class);
+        CMSSignedData signedData = new CMSSignedData(Files.readAllBytes(signedFile));
+        SignerInformationStore signerInformationStore = signedData.getSignerInfos();
+        Store<X509CertificateHolder> certificateStore = signedData.getCertificates();
+
+        List<SignedFileSigner> signers = new ArrayList<>();
+        for (SignerInformation signerInformation : signerInformationStore.getSigners()) {
+            Collection<X509CertificateHolder> matches = certificateStore.getMatches(signerInformation.getSID());
+            String signerName = "Firmatario non disponibile";
+            if (!matches.isEmpty()) {
+                signerName = extractDisplayName(matches.iterator().next().getSubject().toString());
+            }
+            signers.add(new SignedFileSigner(signerName, extractSigningTime(signerInformation)));
+        }
+
+        return new SignedFileInspection(
+                signedFile.getFileName().toString(),
+                signedFile.toAbsolutePath(),
+                attributes.creationTime().toInstant(),
+                List.copyOf(signers)
+        );
+    }
+
     private Path signSingleFile(
             PrivateKey privateKey,
             String signatureProviderName,
             X509Certificate signerCertificate,
             List<X509Certificate> certificateChain,
             Path inputFile,
-            Path outputDirectory
+            Path outputFile
     ) throws Exception {
         JcaContentSignerBuilder contentSignerBuilder = new JcaContentSignerBuilder(resolveSignatureAlgorithm(privateKey));
         if (signatureProviderName != null && !signatureProviderName.isBlank()) {
@@ -175,9 +224,30 @@ public final class SignatureService {
         CMSTypedData data = new CMSProcessableByteArray(payload);
         CMSSignedData signedData = signedDataGenerator.generate(data, true);
 
-        Path outputFile = outputDirectory.resolve(inputFile.getFileName().toString() + ".p7m");
         Files.write(outputFile, signedData.getEncoded());
         return outputFile;
+    }
+
+    private LoadedSigningMaterial loadSigningMaterial(SignatureConfig config, String alias) throws Exception {
+        LoadedKeyStore loadedKeyStore = loadKeyStore(config);
+        String effectiveAlias = resolveAlias(loadedKeyStore.keyStore(), config.mode(), alias);
+        PrivateKey privateKey = (PrivateKey) loadedKeyStore.keyStore().getKey(effectiveAlias, loadedKeyStore.keyPassword());
+        if (privateKey == null) {
+            throw new IllegalStateException("Chiave privata non disponibile per alias " + effectiveAlias);
+        }
+
+        Certificate[] chain = loadedKeyStore.keyStore().getCertificateChain(effectiveAlias);
+        if (chain == null || chain.length == 0) {
+            throw new IllegalStateException("Catena certificati non disponibile per alias " + effectiveAlias);
+        }
+
+        X509Certificate signerCertificate = (X509Certificate) chain[0];
+        List<X509Certificate> certificateChain = new ArrayList<>();
+        for (Certificate certificate : chain) {
+            certificateChain.add((X509Certificate) certificate);
+        }
+
+        return new LoadedSigningMaterial(privateKey, loadedKeyStore.signatureProviderName(), signerCertificate, List.copyOf(certificateChain));
     }
 
     private LoadedKeyStore loadKeyStore(SignatureConfig config) throws Exception {
@@ -455,12 +525,34 @@ public final class SignatureService {
     }
 
     private String extractDisplayName(X509Certificate certificate) {
-        String subject = certificate.getSubjectX500Principal().getName();
+        return extractDisplayName(certificate.getSubjectX500Principal().getName());
+    }
+
+    private String extractDisplayName(String subject) {
         Matcher matcher = COMMON_NAME_PATTERN.matcher(subject);
         if (matcher.find()) {
             return matcher.group(2).trim().replace("\"", "");
         }
         return subject;
+    }
+
+    private Instant extractSigningTime(SignerInformation signerInformation) {
+        try {
+            AttributeTable signedAttributes = signerInformation.getSignedAttributes();
+            if (signedAttributes == null) {
+                return null;
+            }
+
+            Attribute signingTime = signedAttributes.get(PKCSObjectIdentifiers.pkcs_9_at_signingTime);
+            if (signingTime == null || signingTime.getAttrValues().size() == 0) {
+                return null;
+            }
+
+            Time time = Time.getInstance(signingTime.getAttrValues().getObjectAt(0));
+            return time.getDate().toInstant();
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     private String computeThumbprint(X509Certificate certificate) throws Exception {
@@ -476,6 +568,28 @@ public final class SignatureService {
     }
 
     private record IdentityCollection(List<SigningIdentity> identities, int authenticationCertificates) {
+    }
+
+    private record LoadedSigningMaterial(
+            PrivateKey privateKey,
+            String signatureProviderName,
+            X509Certificate signerCertificate,
+            List<X509Certificate> certificateChain
+    ) {
+    }
+
+    public record SignedFileInspection(
+            String fileName,
+            Path absolutePath,
+            Instant creationTime,
+            List<SignedFileSigner> signers
+    ) {
+    }
+
+    public record SignedFileSigner(
+            String displayName,
+            Instant signingTime
+    ) {
     }
 
     private static final class CadesSignedAttributeGenerator implements CMSAttributeTableGenerator {

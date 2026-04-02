@@ -1,41 +1,42 @@
-# JavaSign
+# OpenFirma
 
-Applicazione desktop Java per firmare uno o piu file in formato `.p7m` usando certificati di firma qualificata disponibili su Windows.
+<p align="center">
+  <img src="design/icon/logo.svg" alt="OpenFirma logo" width="140" />
+</p>
 
-Il progetto e pensato per un caso operativo preciso:
-- firma locale dal PC che vede chiavetta USB o smart card;
-- accesso al certificato tramite store `Windows-MY`;
-- esclusione dei certificati `AUT/CNS`;
-- utilizzo dei soli certificati `SIG/QES` idonei alla firma qualificata.
+Applicazione desktop Java per la firma locale di documenti in formato `.p7m` tramite certificati di firma disponibili nello store `Windows-MY`.
 
-## Stato del progetto
+## Obiettivo
 
-Attualmente la GUI e focalizzata su `Windows-MY`, che e la modalita richiesta per l'uso reale su postazioni Windows con middleware gia installato.
+OpenFirma e pensata per un uso operativo reale su postazioni Windows che vedono token USB, smart card o certificati installati localmente. La GUI privilegia il flusso `Windows-MY` e filtra automaticamente i certificati non idonei alla firma.
 
-Nel backend restano disponibili anche modalita tecniche per test o diagnostica:
-- `PKCS#11`
-- `PKCS#12`
+## Funzionalita rilasciate
 
-## Funzioni principali
-
-- caricamento multiplo documenti;
-- drag-and-drop nella GUI;
-- lista documenti in coda con selezione rapida del file attivo;
-- filtro automatico dei certificati qualificati `SIG/QES`;
-- produzione di file `nomefile.ext.p7m`;
-- verifica locale post-firma;
-- CLI per automazione e test.
+- interfaccia desktop a colonna singola con layout ottimizzato per Windows;
+- drag-and-drop dei file da firmare e selezione multipla da file chooser;
+- coda firme dinamica con conteggio file, peso totale e rimozione rapida dei documenti;
+- selezione del certificato di firma con popup dedicato al dettaglio certificato;
+- gestione cartella di destinazione direttamente nel blocco della coda;
+- controllo pre-firma dei conflitti in output;
+- popup conflitto con azioni `SOVRASCRIVI`, `ANNULLA`, `VERIFICA FILE` e `RINOMINA`;
+- verifica del file gia presente in output con riepilogo nome file, data creazione, data firma e firmatari;
+- rinomina del nuovo output prima della firma per mantenere i file gia presenti;
+- popup di avanzamento firma con stato per ogni file e verifica locale post-firma;
+- svuotamento automatico della coda al termine di una firma completata con successo;
+- popup `LOG` per consultare il tracciamento operativo dell'app;
+- CLI tecnica per automazione, test e diagnostica;
+- packaging Windows con runtime incluso.
 
 ## Requisiti
 
 - Windows;
 - Java 21 installato e disponibile in `PATH`;
-- middleware del token o della smart card gia installato nel sistema;
-- accesso internet al primo build per scaricare le dipendenze Bouncy Castle.
+- middleware del token o della smart card gia installato;
+- accesso internet al primo build per scaricare le dipendenze.
 
 ## Avvio rapido
 
-Compila e apre la GUI:
+Compila e avvia la GUI:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -48,7 +49,7 @@ Compila senza aprire la GUI:
 .\build.ps1 -BuildOnly
 ```
 
-Avvia la GUI usando una build gia compilata:
+Avvia una build gia compilata:
 
 ```powershell
 .\run.ps1
@@ -56,35 +57,33 @@ Avvia la GUI usando una build gia compilata:
 
 ## Packaging Windows
 
-Per generare una cartella Windows eseguibile con runtime incluso:
+Genera la distribuzione Windows con runtime incluso:
 
 ```powershell
 .\package.ps1
 ```
 
-L'output viene creato qui:
+Output previsto:
 
 ```text
-release\JavaSign\JavaSign.exe
+release\OpenFirma\OpenFirma.exe
 ```
 
-Se vuoi rigenerare tutto da zero:
+Rigenerazione pulita:
 
 ```powershell
 .\package.ps1 -Clean
 ```
 
-## Uso operativo
+## Flusso operativo
 
-1. collega token o smart card al PC;
-2. verifica che Windows veda il certificato di firma;
-3. avvia l'app;
-4. seleziona il certificato `SIG/QES` proposto;
-5. carica uno o piu file;
-6. scegli la cartella di output;
-7. firma i documenti.
-
-I file firmati vengono generati con estensione `.p7m` nella directory di output selezionata.
+1. Collega token o smart card e verifica che il certificato sia visibile in Windows.
+2. Avvia OpenFirma.
+3. Seleziona il certificato di firma proposto.
+4. Carica uno o piu file da firmare.
+5. Scegli la cartella di destinazione.
+6. Avvia la firma.
+7. In caso di file gia presenti in output, scegli se sovrascrivere, verificare o rinominare il nuovo output.
 
 ## Uso CLI
 
@@ -106,34 +105,23 @@ Firma di test con `PKCS#12`:
 .\run.ps1 --mode PKCS12 --resource ".\testdata\signer.p12" --secret "changeit" --out ".\output" --file ".\testdata\sample.txt"
 ```
 
-## Struttura del progetto
+## Struttura progetto
 
 ```text
+design/icon/
 src/main/java/it/firmadigitale/
-  AppLauncher.java
-  SignatureFrame.java
-  SignatureService.java
-  CliRunner.java
-  SigningIdentity.java
-  CertificateProfile.java
+build.ps1
+package.ps1
+run.ps1
 ```
 
 ## Note tecniche
 
 - il file prodotto e una firma CMS allegata con estensione `.p7m`;
-- viene aggiunto l'attributo `signingCertificateV2`;
-- la GUI mostra solo certificati qualificati coerenti con il flusso `Windows-MY`;
-- per conformita piu avanzata, LTV o marca temporale, il passo successivo naturale e l'integrazione con una libreria specialistica come DSS.
+- la verifica locale controlla la validita della firma CMS generata;
+- la GUI e orientata al flusso `Windows-MY`, mentre il backend mantiene anche supporto tecnico a `PKCS#11` e `PKCS#12`;
+- gli asset grafici SVG della UI sono in `design/icon`.
 
-## Limitazioni attuali
+## Licenza
 
-- il progetto non e pensato come servizio remoto: la firma deve partire dalla macchina locale;
-- la UI e in evoluzione e sta convergendo verso un layout piu vicino a una web app tecnica;
-- il comportamento reale dipende anche dal middleware installato e dal tipo di dispositivo usato.
-
-## Roadmap breve
-
-- ulteriore rifinitura UI/UX;
-- miglioramento gestione coda file;
-- verifica piu esplicita del certificato selezionato;
-- eventuale packaging come eseguibile Windows.
+Questo progetto e rilasciato come software open source sotto licenza `MIT`.
