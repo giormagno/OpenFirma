@@ -1,11 +1,18 @@
 package it.firmadigitale;
 
+import java.awt.Color;
+import java.awt.geom.AffineTransform;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
+import java.util.Calendar;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
@@ -27,6 +34,26 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.ExternalSigningSupport;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
+import org.apache.pdfbox.pdmodel.interactive.digitalsignature.SignatureOptions;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
+import org.apache.pdfbox.util.Matrix;
 import org.bouncycastle.asn1.ASN1InputStream;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
@@ -143,28 +170,92 @@ public final class SignatureService {
         );
     }
 
+    public Path signPdfFile(
+            SignatureConfig config,
+            String alias,
+            Path inputFile,
+            Path outputFile,
+            PdfVisibleSignaturePlacement placement,
+            String signerDisplayName,
+            boolean applyToEveryPage
+    ) throws Exception {
+        if (inputFile == null || !Files.exists(inputFile)) {
+            throw new IllegalArgumentException("File PDF non trovato: " + inputFile);
+        }
+        if (outputFile == null) {
+            throw new IllegalArgumentException("Il file PDF di output non e valido.");
+        }
+        if (placement == null) {
+            throw new IllegalArgumentException("La posizione della firma PDF non e stata definita.");
+        }
+
+        Path parent = outputFile.toAbsolutePath().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
+        LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
+        SignatureOptions signatureOptions = null;
+
+        try (PDDocument document = Loader.loadPDF(inputFile.toFile());
+             OutputStream outputStream = Files.newOutputStream(outputFile)) {
+            if (document.getNumberOfPages() == 0) {
+                throw new IllegalArgumentException("Il PDF selezionato non contiene pagine.");
+            }
+            if (placement.pageIndex() < 0 || placement.pageIndex() >= document.getNumberOfPages()) {
+                throw new IllegalArgumentException("La pagina selezionata per la firma PDF non e valida.");
+            }
+
+            String resolvedSignerName = resolvePdfSignerName(signingMaterial.signerCertificate(), signerDisplayName);
+            Calendar signingCalendar = Calendar.getInstance();
+
+            PDSignature signature = new PDSignature();
+            signature.setFilter(PDSignature.FILTER_ADOBE_PPKLITE);
+            signature.setSubFilter(PDSignature.SUBFILTER_ETSI_CADES_DETACHED);
+            signature.setName(resolvedSignerName);
+            signature.setLocation("OpenFirma");
+            signature.setReason("Firma PDF");
+            signature.setSignDate(signingCalendar);
+
+            if (applyToEveryPage) {
+                stampVisibleSignatureOnEveryPage(document, placement, resolvedSignerName, signingCalendar);
+                document.addSignature(signature);
+            } else {
+                signatureOptions = new SignatureOptions();
+                signatureOptions.setPreferredSignatureSize(SignatureOptions.DEFAULT_SIGNATURE_SIZE * 2);
+                signatureOptions.setPage(placement.pageIndex());
+                signatureOptions.setVisualSignature(createPdfVisibleSignatureTemplate(
+                        document,
+                        placement,
+                        signature,
+                        resolvedSignerName
+                ));
+                document.addSignature(signature, signatureOptions);
+            }
+
+            ExternalSigningSupport externalSigning = document.saveIncrementalForExternalSigning(outputStream);
+            byte[] cmsSignature = signDetachedPdfContent(signingMaterial, externalSigning.getContent());
+            externalSigning.setSignature(cmsSignature);
+            return outputFile;
+        } finally {
+            if (signatureOptions != null) {
+                try {
+                    signatureOptions.close();
+                } catch (Exception ignored) {
+                    // SignatureOptions puo gia essere stato chiuso dal runtime PDFBox.
+                }
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     public boolean verifySignature(Path signedFile) throws Exception {
+        if (isPdfFile(signedFile)) {
+            return verifyPdfSignature(signedFile);
+        }
+
         CMSSignedData signedData = new CMSSignedData(Files.readAllBytes(signedFile));
-        SignerInformationStore signerInformationStore = signedData.getSignerInfos();
-        Store<X509CertificateHolder> certificateStore = signedData.getCertificates();
-
-        if (signerInformationStore.getSigners().isEmpty()) {
-            return false;
-        }
-
-        for (SignerInformation signerInformation : signerInformationStore.getSigners()) {
-            Collection<X509CertificateHolder> matches = certificateStore.getMatches(signerInformation.getSID());
-            if (matches.isEmpty()) {
-                return false;
-            }
-            X509CertificateHolder signerCertificate = matches.iterator().next();
-            if (!signerInformation.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider(BouncyCastleProvider.PROVIDER_NAME).build(signerCertificate))) {
-                return false;
-            }
-        }
-
-        return true;
+        return verifyCmsSignedData(signedData);
     }
 
     @SuppressWarnings("unchecked")
@@ -173,10 +264,16 @@ public final class SignatureService {
             throw new IllegalArgumentException("File non trovato: " + signedFile);
         }
 
+        if (isPdfFile(signedFile)) {
+            return inspectPdfSignedFile(signedFile);
+        }
+
         BasicFileAttributes attributes = Files.readAttributes(signedFile, BasicFileAttributes.class);
         CMSSignedData signedData = new CMSSignedData(Files.readAllBytes(signedFile));
         SignerInformationStore signerInformationStore = signedData.getSignerInfos();
         Store<X509CertificateHolder> certificateStore = signedData.getCertificates();
+        byte[] embeddedContent = extractEmbeddedContent(signedData);
+        SignedContentDescriptor contentDescriptor = describeEmbeddedContent(embeddedContent);
 
         List<SignedFileSigner> signers = new ArrayList<>();
         for (SignerInformation signerInformation : signerInformationStore.getSigners()) {
@@ -192,7 +289,11 @@ public final class SignatureService {
                 signedFile.getFileName().toString(),
                 signedFile.toAbsolutePath(),
                 attributes.creationTime().toInstant(),
-                List.copyOf(signers)
+                List.copyOf(signers),
+                embeddedContent,
+                contentDescriptor.label(),
+                contentDescriptor.textPreviewAvailable(),
+                contentDescriptor.suggestedExtension()
         );
     }
 
@@ -226,6 +327,404 @@ public final class SignatureService {
 
         Files.write(outputFile, signedData.getEncoded());
         return outputFile;
+    }
+
+    private byte[] signDetachedPdfContent(LoadedSigningMaterial signingMaterial, InputStream contentStream) throws Exception {
+        JcaContentSignerBuilder contentSignerBuilder =
+                new JcaContentSignerBuilder(resolveSignatureAlgorithm(signingMaterial.privateKey()));
+        if (signingMaterial.signatureProviderName() != null && !signingMaterial.signatureProviderName().isBlank()) {
+            contentSignerBuilder.setProvider(signingMaterial.signatureProviderName());
+        }
+        ContentSigner contentSigner = contentSignerBuilder.build(signingMaterial.privateKey());
+
+        DigestCalculatorProvider digestCalculatorProvider =
+                new JcaDigestCalculatorProviderBuilder().setProvider(BouncyCastleProvider.PROVIDER_NAME).build();
+
+        JcaSignerInfoGeneratorBuilder signerInfoGeneratorBuilder = new JcaSignerInfoGeneratorBuilder(digestCalculatorProvider);
+        signerInfoGeneratorBuilder.setSignedAttributeGenerator(
+                new CadesSignedAttributeGenerator(signingMaterial.signerCertificate()));
+
+        CMSSignedDataGenerator signedDataGenerator = new CMSSignedDataGenerator();
+        signedDataGenerator.addSignerInfoGenerator(
+                signerInfoGeneratorBuilder.build(contentSigner, signingMaterial.signerCertificate()));
+        signedDataGenerator.addCertificates(new JcaCertStore(signingMaterial.certificateChain()));
+
+        CMSTypedData data = new CMSProcessableInputStream(contentStream);
+        CMSSignedData signedData = signedDataGenerator.generate(data, false);
+        return signedData.getEncoded();
+    }
+
+    private void stampVisibleSignatureOnEveryPage(
+            PDDocument document,
+            PdfVisibleSignaturePlacement placement,
+            String signerDisplayName,
+            Calendar signingCalendar
+    ) throws IOException {
+        for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+            PdfVisibleSignaturePlacement pagePlacement = remapPdfPlacement(document, placement, pageIndex);
+            stampVisibleSignatureOnPage(document, pagePlacement, signerDisplayName, signingCalendar);
+        }
+    }
+
+    private PdfVisibleSignaturePlacement remapPdfPlacement(
+            PDDocument document,
+            PdfVisibleSignaturePlacement placement,
+            int targetPageIndex
+    ) {
+        PDRectangle sourcePageBox = document.getPage(placement.pageIndex()).getCropBox();
+        PDRectangle targetPageBox = document.getPage(targetPageIndex).getCropBox();
+
+        float widthRatio = placement.width() / sourcePageBox.getWidth();
+        float heightRatio = placement.height() / sourcePageBox.getHeight();
+        float xRatio = placement.x() / sourcePageBox.getWidth();
+        float yRatio = placement.y() / sourcePageBox.getHeight();
+
+        float width = Math.max(72f, Math.min(targetPageBox.getWidth() - 56f, targetPageBox.getWidth() * widthRatio));
+        float height = Math.max(36f, Math.min(targetPageBox.getHeight() - 56f, targetPageBox.getHeight() * heightRatio));
+        float x = Math.max(28f, Math.min(targetPageBox.getWidth() - width - 28f, targetPageBox.getWidth() * xRatio));
+        float y = Math.max(28f, Math.min(targetPageBox.getHeight() - height - 28f, targetPageBox.getHeight() * yRatio));
+        return new PdfVisibleSignaturePlacement(targetPageIndex, x, y, width, height);
+    }
+
+    private void stampVisibleSignatureOnPage(
+            PDDocument document,
+            PdfVisibleSignaturePlacement placement,
+            String signerDisplayName,
+            Calendar signingCalendar
+    ) throws IOException {
+        PDPage page = document.getPage(placement.pageIndex());
+        PDRectangle signatureRectangle = createPdfSignatureRectangle(document, placement);
+
+        try (PDPageContentStream contentStream = new PDPageContentStream(
+                document,
+                page,
+                PDPageContentStream.AppendMode.APPEND,
+                true,
+                true
+        )) {
+            contentStream.saveGraphicsState();
+            AffineTransform transform = new AffineTransform();
+            switch (page.getRotation()) {
+                case 90 -> {
+                    transform.translate(signatureRectangle.getLowerLeftX(), signatureRectangle.getUpperRightY());
+                    transform.rotate(-Math.PI / 2d);
+                }
+                case 180 -> {
+                    transform.translate(signatureRectangle.getUpperRightX(), signatureRectangle.getUpperRightY());
+                    transform.rotate(Math.PI);
+                }
+                case 270 -> {
+                    transform.translate(signatureRectangle.getUpperRightX(), signatureRectangle.getLowerLeftY());
+                    transform.rotate(Math.PI / 2d);
+                }
+                default -> transform.translate(signatureRectangle.getLowerLeftX(), signatureRectangle.getLowerLeftY());
+            }
+            contentStream.transform(new Matrix(transform));
+            drawPdfSignatureAppearance(contentStream, placement.width(), placement.height(), signerDisplayName, signingCalendar);
+            contentStream.restoreGraphicsState();
+        }
+    }
+
+    private void drawPdfSignatureAppearance(
+            PDPageContentStream contentStream,
+            float width,
+            float height,
+            String signerDisplayName,
+            Calendar signingCalendar
+    ) throws IOException {
+        PDFont titleFont = new PDType1Font(FontName.HELVETICA_BOLD);
+        PDFont bodyFont = new PDType1Font(FontName.HELVETICA);
+        String signerLine = abbreviateSignatureText(signerDisplayName, 42);
+        String signedAtLine = "Firmato il " + signingCalendar.getTime();
+
+        contentStream.setNonStrokingColor(new Color(247, 250, 250));
+        contentStream.addRect(0, 0, width, height);
+        contentStream.fill();
+
+        contentStream.setNonStrokingColor(new Color(0, 102, 108));
+        contentStream.addRect(0, 0, Math.min(8, width * 0.08f), height);
+        contentStream.fill();
+
+        contentStream.setStrokingColor(new Color(207, 212, 214));
+        contentStream.setLineWidth(1f);
+        contentStream.addRect(0.5f, 0.5f, width - 1f, height - 1f);
+        contentStream.stroke();
+
+        float paddingLeft = Math.min(18f, width * 0.14f);
+        float titleY = height - 18f;
+
+        contentStream.beginText();
+        contentStream.setFont(titleFont, Math.max(11f, Math.min(14f, width / 13f)));
+        contentStream.setNonStrokingColor(new Color(0, 65, 69));
+        contentStream.newLineAtOffset(paddingLeft, titleY);
+        contentStream.showText("OpenFirma");
+        contentStream.endText();
+
+        contentStream.beginText();
+        contentStream.setFont(bodyFont, Math.max(8f, Math.min(10f, width / 16f)));
+        contentStream.setNonStrokingColor(Color.BLACK);
+        contentStream.newLineAtOffset(paddingLeft, titleY - 16f);
+        contentStream.showText(signerLine);
+        contentStream.endText();
+
+        contentStream.beginText();
+        contentStream.setFont(bodyFont, Math.max(7f, Math.min(9f, width / 18f)));
+        contentStream.setNonStrokingColor(new Color(84, 88, 89));
+        contentStream.newLineAtOffset(paddingLeft, Math.max(10f, titleY - 30f));
+        contentStream.showText(abbreviateSignatureText(signedAtLine, 48));
+        contentStream.endText();
+    }
+
+    private InputStream createPdfVisibleSignatureTemplate(
+            PDDocument sourceDocument,
+            PdfVisibleSignaturePlacement placement,
+            PDSignature signature,
+            String signerDisplayName
+    ) throws Exception {
+        PDRectangle signatureRectangle = createPdfSignatureRectangle(sourceDocument, placement);
+
+        try (PDDocument appearanceDocument = new PDDocument()) {
+            PDPage templatePage = new PDPage(sourceDocument.getPage(placement.pageIndex()).getMediaBox());
+            appearanceDocument.addPage(templatePage);
+
+            PDAcroForm acroForm = new PDAcroForm(appearanceDocument);
+            appearanceDocument.getDocumentCatalog().setAcroForm(acroForm);
+            acroForm.setSignaturesExist(true);
+            acroForm.setAppendOnly(true);
+            acroForm.getCOSObject().setDirect(true);
+
+            PDSignatureField signatureField = new PDSignatureField(acroForm);
+            acroForm.getFields().add(signatureField);
+
+            PDAnnotationWidget widget = signatureField.getWidgets().get(0);
+            widget.setRectangle(signatureRectangle);
+
+            PDStream stream = new PDStream(appearanceDocument);
+            PDFormXObject form = new PDFormXObject(stream);
+            form.setResources(new PDResources());
+            form.setFormType(1);
+
+            PDRectangle box = new PDRectangle(signatureRectangle.getWidth(), signatureRectangle.getHeight());
+            float appearanceHeight = box.getHeight();
+            Matrix initialScale = null;
+            int rotation = sourceDocument.getPage(placement.pageIndex()).getRotation();
+
+            switch (rotation) {
+                case 90 -> {
+                    form.setMatrix(AffineTransform.getQuadrantRotateInstance(1));
+                    initialScale = Matrix.getScaleInstance(box.getWidth() / box.getHeight(), box.getHeight() / box.getWidth());
+                    appearanceHeight = box.getWidth();
+                }
+                case 180 -> form.setMatrix(AffineTransform.getQuadrantRotateInstance(2));
+                case 270 -> {
+                    form.setMatrix(AffineTransform.getQuadrantRotateInstance(3));
+                    initialScale = Matrix.getScaleInstance(box.getWidth() / box.getHeight(), box.getHeight() / box.getWidth());
+                    appearanceHeight = box.getWidth();
+                }
+                default -> {
+                }
+            }
+
+            form.setBBox(box);
+
+            PDAppearanceDictionary appearance = new PDAppearanceDictionary();
+            appearance.getCOSObject().setDirect(true);
+            PDAppearanceStream appearanceStream = new PDAppearanceStream(form.getCOSObject());
+            appearance.setNormalAppearance(appearanceStream);
+            widget.setAppearance(appearance);
+
+            try (PDPageContentStream contentStream = new PDPageContentStream(appearanceDocument, appearanceStream)) {
+                if (initialScale != null) {
+                    contentStream.transform(initialScale);
+                }
+
+                drawPdfSignatureAppearance(
+                        contentStream,
+                        box.getWidth(),
+                        appearanceHeight,
+                        signerDisplayName,
+                        signature.getSignDate()
+                );
+            }
+
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            appearanceDocument.save(output);
+            return new ByteArrayInputStream(output.toByteArray());
+        }
+    }
+
+    private PDRectangle createPdfSignatureRectangle(PDDocument document, PdfVisibleSignaturePlacement placement) {
+        float x = placement.x();
+        float y = placement.y();
+        float width = placement.width();
+        float height = placement.height();
+
+        PDPage page = document.getPage(placement.pageIndex());
+        PDRectangle pageBox = page.getCropBox();
+        PDRectangle rectangle = new PDRectangle();
+
+        switch (page.getRotation()) {
+            case 90 -> {
+                rectangle.setLowerLeftY(x);
+                rectangle.setUpperRightY(x + width);
+                rectangle.setLowerLeftX(y);
+                rectangle.setUpperRightX(y + height);
+            }
+            case 180 -> {
+                rectangle.setUpperRightX(pageBox.getWidth() - x);
+                rectangle.setLowerLeftX(pageBox.getWidth() - x - width);
+                rectangle.setLowerLeftY(y);
+                rectangle.setUpperRightY(y + height);
+            }
+            case 270 -> {
+                rectangle.setLowerLeftY(pageBox.getHeight() - x - width);
+                rectangle.setUpperRightY(pageBox.getHeight() - x);
+                rectangle.setLowerLeftX(pageBox.getWidth() - y - height);
+                rectangle.setUpperRightX(pageBox.getWidth() - y);
+            }
+            default -> {
+                rectangle.setLowerLeftX(x);
+                rectangle.setUpperRightX(x + width);
+                rectangle.setLowerLeftY(pageBox.getHeight() - y - height);
+                rectangle.setUpperRightY(pageBox.getHeight() - y);
+            }
+        }
+        return rectangle;
+    }
+
+    private String resolvePdfSignerName(X509Certificate certificate, String signerDisplayName) {
+        if (signerDisplayName != null && !signerDisplayName.isBlank()) {
+            return signerDisplayName;
+        }
+        return extractDisplayName(certificate.getSubjectX500Principal().getName());
+    }
+
+    private String abbreviateSignatureText(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, Math.max(0, maxLength - 3)) + "...";
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean verifyPdfSignature(Path signedFile) throws Exception {
+        byte[] pdfBytes = Files.readAllBytes(signedFile);
+
+        try (PDDocument document = Loader.loadPDF(pdfBytes)) {
+            List<PDSignature> signatures = document.getSignatureDictionaries();
+            if (signatures.isEmpty()) {
+                return false;
+            }
+
+            for (PDSignature signature : signatures) {
+                CMSSignedData signedData = extractPdfSignedData(signature, pdfBytes);
+                if (!verifyCmsSignedData(signedData)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private SignedFileInspection inspectPdfSignedFile(Path signedFile) throws Exception {
+        BasicFileAttributes attributes = Files.readAttributes(signedFile, BasicFileAttributes.class);
+        byte[] pdfBytes = Files.readAllBytes(signedFile);
+        List<SignedFileSigner> signers = new ArrayList<>();
+
+        try (PDDocument document = Loader.loadPDF(pdfBytes)) {
+            List<PDSignature> signatures = document.getSignatureDictionaries();
+            if (signatures.isEmpty()) {
+                throw new IllegalStateException("Il PDF selezionato non contiene firme digitali.");
+            }
+
+            for (PDSignature signature : signatures) {
+                CMSSignedData signedData = extractPdfSignedData(signature, pdfBytes);
+                SignerInformationStore signerInformationStore = signedData.getSignerInfos();
+                Store<X509CertificateHolder> certificateStore = signedData.getCertificates();
+                Instant signatureInstant = signature.getSignDate() == null
+                        ? null
+                        : signature.getSignDate().toInstant();
+
+                for (SignerInformation signerInformation : signerInformationStore.getSigners()) {
+                    Collection<X509CertificateHolder> matches = certificateStore.getMatches(signerInformation.getSID());
+                    String signerName = signature.getName();
+                    if (matches.isEmpty()) {
+                        signerName = (signerName == null || signerName.isBlank())
+                                ? "Firmatario non disponibile"
+                                : signerName;
+                    } else {
+                        signerName = extractDisplayName(matches.iterator().next().getSubject().toString());
+                    }
+
+                    Instant signingTime = extractSigningTime(signerInformation);
+                    signers.add(new SignedFileSigner(signerName, signingTime != null ? signingTime : signatureInstant));
+                }
+            }
+        }
+
+        return new SignedFileInspection(
+                signedFile.getFileName().toString(),
+                signedFile.toAbsolutePath(),
+                attributes.creationTime().toInstant(),
+                List.copyOf(signers),
+                pdfBytes,
+                "PDF",
+                false,
+                ".pdf"
+        );
+    }
+
+    private CMSSignedData extractPdfSignedData(PDSignature signature, byte[] pdfBytes) throws Exception {
+        byte[] signedContent = signature.getSignedContent(pdfBytes);
+        byte[] signatureContent = signature.getContents(pdfBytes);
+        return new CMSSignedData(new CMSProcessableByteArray(signedContent), signatureContent);
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean verifyCmsSignedData(CMSSignedData signedData) throws Exception {
+        SignerInformationStore signerInformationStore = signedData.getSignerInfos();
+        Store<X509CertificateHolder> certificateStore = signedData.getCertificates();
+
+        if (signerInformationStore.getSigners().isEmpty()) {
+            return false;
+        }
+
+        for (SignerInformation signerInformation : signerInformationStore.getSigners()) {
+            Collection<X509CertificateHolder> matches = certificateStore.getMatches(signerInformation.getSID());
+            if (matches.isEmpty()) {
+                return false;
+            }
+            X509CertificateHolder signerCertificate = matches.iterator().next();
+            if (!signerInformation.verify(
+                    new JcaSimpleSignerInfoVerifierBuilder()
+                            .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                            .build(signerCertificate))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean isPdfFile(Path file) throws Exception {
+        String lowerCaseName = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (lowerCaseName.endsWith(".pdf")) {
+            return true;
+        }
+
+        if (!Files.exists(file) || Files.size(file) < 4) {
+            return false;
+        }
+
+        try (InputStream inputStream = Files.newInputStream(file)) {
+            byte[] header = inputStream.readNBytes(4);
+            return header.length == 4
+                    && header[0] == '%'
+                    && header[1] == 'P'
+                    && header[2] == 'D'
+                    && header[3] == 'F';
+        }
     }
 
     private LoadedSigningMaterial loadSigningMaterial(SignatureConfig config, String alias) throws Exception {
@@ -555,6 +1054,69 @@ public final class SignatureService {
         }
     }
 
+    private byte[] extractEmbeddedContent(CMSSignedData signedData) throws Exception {
+        CMSTypedData signedContent = signedData.getSignedContent();
+        if (signedContent == null) {
+            return new byte[0];
+        }
+
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        signedContent.write(outputStream);
+        return outputStream.toByteArray();
+    }
+
+    private SignedContentDescriptor describeEmbeddedContent(byte[] embeddedContent) {
+        if (embeddedContent == null || embeddedContent.length == 0) {
+            return new SignedContentDescriptor("Nessun contenuto incorporato", false, ".bin");
+        }
+
+        if (startsWith(embeddedContent, "%PDF-")) {
+            return new SignedContentDescriptor("PDF", false, ".pdf");
+        }
+
+        String textProbe = new String(embeddedContent, 0, Math.min(embeddedContent.length, 512), StandardCharsets.UTF_8).trim();
+        if (textProbe.startsWith("<?xml") || textProbe.startsWith("<")) {
+            return new SignedContentDescriptor("XML", true, ".xml");
+        }
+        if (textProbe.startsWith("{") || textProbe.startsWith("[")) {
+            return new SignedContentDescriptor("JSON", true, ".json");
+        }
+        if (isProbablyTextContent(embeddedContent)) {
+            return new SignedContentDescriptor("Testo", true, ".txt");
+        }
+
+        return new SignedContentDescriptor("Binario", false, ".bin");
+    }
+
+    private boolean isProbablyTextContent(byte[] embeddedContent) {
+        if (embeddedContent == null || embeddedContent.length == 0) {
+            return false;
+        }
+
+        int sampleSize = Math.min(embeddedContent.length, 2048);
+        int printable = 0;
+        for (int index = 0; index < sampleSize; index++) {
+            int value = embeddedContent[index] & 0xFF;
+            if (value == 9 || value == 10 || value == 13 || (value >= 32 && value < 127)) {
+                printable++;
+            }
+        }
+        return printable >= (int) (sampleSize * 0.82);
+    }
+
+    private boolean startsWith(byte[] content, String prefix) {
+        byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
+        if (content.length < prefixBytes.length) {
+            return false;
+        }
+        for (int index = 0; index < prefixBytes.length; index++) {
+            if (content[index] != prefixBytes[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private String computeThumbprint(X509Certificate certificate) throws Exception {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-1").digest(certificate.getEncoded());
@@ -578,17 +1140,37 @@ public final class SignatureService {
     ) {
     }
 
+    public record PdfVisibleSignaturePlacement(
+            int pageIndex,
+            float x,
+            float y,
+            float width,
+            float height
+    ) {
+    }
+
     public record SignedFileInspection(
             String fileName,
             Path absolutePath,
             Instant creationTime,
-            List<SignedFileSigner> signers
+            List<SignedFileSigner> signers,
+            byte[] embeddedContent,
+            String contentTypeLabel,
+            boolean textPreviewAvailable,
+            String suggestedExtension
     ) {
     }
 
     public record SignedFileSigner(
             String displayName,
             Instant signingTime
+    ) {
+    }
+
+    private record SignedContentDescriptor(
+            String label,
+            boolean textPreviewAvailable,
+            String suggestedExtension
     ) {
     }
 
@@ -607,6 +1189,30 @@ public final class SignatureService {
         public AttributeTable getAttributes(Map parameters) throws CMSAttributeTableGenerationException {
             AttributeTable attributeTable = delegate.getAttributes(parameters);
             return attributeTable.add(PKCSObjectIdentifiers.id_aa_signingCertificateV2, signingCertificateV2);
+        }
+    }
+
+    private static final class CMSProcessableInputStream implements CMSTypedData {
+        private final InputStream inputStream;
+
+        private CMSProcessableInputStream(InputStream inputStream) {
+            this.inputStream = inputStream;
+        }
+
+        @Override
+        public ASN1ObjectIdentifier getContentType() {
+            return PKCSObjectIdentifiers.data;
+        }
+
+        @Override
+        public Object getContent() {
+            return inputStream;
+        }
+
+        @Override
+        public void write(OutputStream outputStream) throws IOException {
+            inputStream.transferTo(outputStream);
+            inputStream.close();
         }
     }
 }

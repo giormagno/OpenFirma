@@ -58,6 +58,7 @@ $classPath = @(
     Join-Path $inputDir "bcpkix-jdk18on-1.78.1.jar"
     Join-Path $inputDir "bcprov-jdk18on-1.78.1.jar"
     Join-Path $inputDir "bcutil-jdk18on-1.78.1.jar"
+    Join-Path $inputDir "pdfbox-app-3.0.3.jar"
     Join-Path $inputDir "svg-salamander-1.1.5.5.jar"
 ) -join ";"
 
@@ -78,7 +79,7 @@ Remove-Item (Join-Path $releaseDir "OpenFirma") -Recurse -Force -ErrorAction Sil
     --main-class "it.firmadigitale.AppLauncher" `
     --vendor "Codex" `
     --app-version "0.1.0" `
-    --description "Desktop app per firma digitale P7M con certificati QES su Windows-MY" `
+    --description "Desktop app per firma digitale P7M e PDF con certificati su Windows-MY" `
     --add-modules $runtimeModules `
     --java-options "--add-modules=jdk.crypto.cryptoki,jdk.crypto.mscapi"
 

@@ -6,6 +6,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
+import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -17,6 +18,7 @@ import java.awt.Image;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.datatransfer.DataFlavor;
@@ -24,8 +26,11 @@ import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -36,6 +41,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -46,11 +52,13 @@ import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
+import javax.swing.JList;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -61,12 +69,18 @@ import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.JTabbedPane;
 import javax.swing.TransferHandler;
 import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.plaf.basic.BasicScrollBarUI;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.rendering.PDFRenderer;
 
 public final class SignatureFrame extends JFrame {
 
@@ -92,6 +106,10 @@ public final class SignatureFrame extends JFrame {
     private static final int EMPTY_QUEUE_PANEL_HEIGHT = 176;
     private static final int QUEUE_PANEL_BASE_HEIGHT = 164;
     private static final int ASSET_ROW_HEIGHT = 88;
+    private static final float PDF_PREVIEW_DPI = 144f;
+    private static final float PDF_SIGNATURE_DEFAULT_WIDTH = 176f;
+    private static final float PDF_SIGNATURE_DEFAULT_HEIGHT = 64f;
+    private static final float PDF_SIGNATURE_MARGIN = 28f;
     private static final Pattern COMMON_NAME_PATTERN = Pattern.compile("(^|,\\s*)CN=([^,]+)");
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final DateTimeFormatter DATE_TIME_VALUE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
@@ -112,6 +130,7 @@ public final class SignatureFrame extends JFrame {
     private final JLabel statusLabel = new JLabel("Pronto");
     private final JLabel activeAssetLabel = new JLabel("Focused asset");
     private final JButton logButton = new JButton("LOG");
+    private final JButton verifyButton = new JButton("Verifica");
     private final JButton loadCertificatesButton = new JButton("Aggiorna certificati");
     private final InfoIconLabel certificateInfoIcon = new InfoIconLabel();
     private final LinkLabel browseFilesLinkLabel = new LinkLabel("NAVIGA TRA LE CARTELLE");
@@ -119,6 +138,7 @@ public final class SignatureFrame extends JFrame {
     private final JButton removeFileButton = new JButton("Rimuovi selezionato");
     private final JButton clearFilesButton = new JButton("Svuota coda");
     private final JButton signButton = new JButton("Firma file");
+    private final JComboBox<SigningModeOption> signingModeCombo = new JComboBox<>(SigningModeOption.values());
     private final JProgressBar progressBar = new JProgressBar();
 
     private JPanel filesWorkspacePanel;
@@ -143,6 +163,14 @@ public final class SignatureFrame extends JFrame {
         setContentPane(buildRootPanel());
         setSize(computeInitialWindowSize());
         setLocationRelativeTo(null);
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent event) {
+                if (getWidth() < 650) {
+                    SwingUtilities.invokeLater(() -> setSize(650, getHeight()));
+                }
+            }
+        });
         configureComponents();
         bindActions();
         refreshCertificateInfoState();
@@ -186,11 +214,12 @@ public final class SignatureFrame extends JFrame {
         textPanel.add(markLabel);
         textPanel.add(titleLabel);
 
-        JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         badgePanel.setOpaque(false);
 
         panel.add(textPanel, BorderLayout.CENTER);
         badgePanel.add(signButton);
+        badgePanel.add(verifyButton);
         badgePanel.add(logButton);
         panel.add(badgePanel, BorderLayout.EAST);
         return panel;
@@ -330,21 +359,39 @@ public final class SignatureFrame extends JFrame {
     }
 
     private JPanel buildDropZonePanel() {
-        dropZonePanel.removeAll();
-        dropZonePanel.setLayout(new BorderLayout());
-        dropZonePanel.setTransferHandler(new FileDropHandler());
-        dropZonePanel.setMinimumSize(new Dimension(380, 228));
-        dropZonePanel.setPreferredSize(new Dimension(420, 252));
-        dropZonePanel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        for (var listener : dropZonePanel.getMouseListeners()) {
-            dropZonePanel.removeMouseListener(listener);
+        return configureUploadDropZone(
+                dropZonePanel,
+                "FILE DA FIRMARE",
+                browseFilesLinkLabel,
+                new FileDropHandler(),
+                () -> {
+                    if (!busy) {
+                        addFilesFromChooser();
+                    }
+                }
+        );
+    }
+
+    private JPanel configureUploadDropZone(
+            DropSurfacePanel targetPanel,
+            String titleText,
+            LinkLabel browseLinkLabel,
+            TransferHandler transferHandler,
+            Runnable browseAction
+    ) {
+        targetPanel.removeAll();
+        targetPanel.setLayout(new BorderLayout());
+        targetPanel.setTransferHandler(transferHandler);
+        targetPanel.setMinimumSize(new Dimension(380, 228));
+        targetPanel.setPreferredSize(new Dimension(420, 252));
+        targetPanel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        for (var listener : targetPanel.getMouseListeners()) {
+            targetPanel.removeMouseListener(listener);
         }
-        dropZonePanel.addMouseListener(new MouseAdapter() {
+        targetPanel.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent event) {
-                if (!busy) {
-                    addFilesFromChooser();
-                }
+                browseAction.run();
             }
         });
 
@@ -356,7 +403,7 @@ public final class SignatureFrame extends JFrame {
         JComponent glyph = createDropZoneSvgLabel();
         glyph.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        JLabel title = new JLabel("FILE DA FIRMARE");
+        JLabel title = new JLabel(titleText);
         title.setFont(new Font("Segoe UI", Font.BOLD, 18));
         title.setForeground(TEXT_PRIMARY);
         title.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -371,8 +418,8 @@ public final class SignatureFrame extends JFrame {
         orLabel.setForeground(TEXT_MUTED);
         orLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        browseFilesLinkLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        browseFilesLinkLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        browseLinkLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        browseLinkLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
         content.add(Box.createVerticalGlue());
         content.add(glyph);
@@ -383,11 +430,11 @@ public final class SignatureFrame extends JFrame {
         content.add(Box.createVerticalStrut(2));
         content.add(orLabel);
         content.add(Box.createVerticalStrut(2));
-        content.add(browseFilesLinkLabel);
+        content.add(browseLinkLabel);
         content.add(Box.createVerticalGlue());
 
-        dropZonePanel.add(content, BorderLayout.CENTER);
-        return dropZonePanel;
+        targetPanel.add(content, BorderLayout.CENTER);
+        return targetPanel;
     }
 
     private JPanel buildQueuePanel() {
@@ -402,10 +449,21 @@ public final class SignatureFrame extends JFrame {
         JPanel titlePanel = new JPanel(new BorderLayout());
         titlePanel.setOpaque(false);
 
+        JPanel titleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
+        titleRow.setOpaque(false);
+
         JLabel queueTitle = new JLabel("Coda delle firme");
         queueTitle.setFont(new Font("Segoe UI", Font.BOLD, 22));
         queueTitle.setForeground(TEXT_PRIMARY);
-        titlePanel.add(queueTitle, BorderLayout.CENTER);
+
+        JLabel modeLabel = new JLabel("Tipo firma");
+        modeLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        modeLabel.setForeground(TEXT_MUTED);
+
+        titleRow.add(queueTitle);
+        titleRow.add(modeLabel);
+        titleRow.add(signingModeCombo);
+        titlePanel.add(titleRow, BorderLayout.CENTER);
 
         JPanel rightHeader = new JPanel(new BorderLayout(10, 0));
         rightHeader.setOpaque(false);
@@ -573,15 +631,19 @@ public final class SignatureFrame extends JFrame {
         getContentPane().setBackground(APP_BACKGROUND);
 
         identityCombo.setRenderer(new IdentityRenderer());
+        signingModeCombo.setRenderer(new SigningModeRenderer());
         identityCombo.setMaximumRowCount(12);
+        signingModeCombo.setMaximumRowCount(2);
         fileQueueCombo.setMaximumRowCount(16);
 
         styleInput(identityCombo);
+        styleInput(signingModeCombo);
         styleInput(fileQueueCombo);
         styleInput(outputField);
         styleOutputField(outputField);
         styleInfoIcon(certificateInfoIcon);
         styleLinkLabel(browseFilesLinkLabel);
+        styleButton(verifyButton, false);
         styleButton(logButton, false);
         certificateCountLabel.setOpaque(true);
         styleBadge(fileCountLabel, new Color(231, 243, 238), new Color(18, 97, 79));
@@ -603,8 +665,12 @@ public final class SignatureFrame extends JFrame {
         logArea.setFont(new Font("Consolas", Font.PLAIN, 13));
         logArea.setBorder(new EmptyBorder(12, 12, 12, 12));
         logArea.setBackground(new Color(248, 248, 244));
-        signButton.setPreferredSize(new Dimension(164, 40));
-        logButton.setPreferredSize(new Dimension(92, 40));
+        signButton.setPreferredSize(new Dimension(144, 40));
+        signingModeCombo.setPreferredSize(new Dimension(136, 34));
+        signingModeCombo.setMinimumSize(new Dimension(136, 34));
+        signingModeCombo.setMaximumSize(new Dimension(136, 34));
+        verifyButton.setPreferredSize(new Dimension(90, 40));
+        logButton.setPreferredSize(new Dimension(82, 40));
         progressBar.setPreferredSize(new Dimension(170, 18));
         updateCertificateCountBadge(0);
 
@@ -614,6 +680,7 @@ public final class SignatureFrame extends JFrame {
     private void bindActions() {
         browseOutputButton.addActionListener(event -> selectOutputDirectory());
         logButton.addActionListener(event -> showLogPopup());
+        verifyButton.addActionListener(event -> verifySignedFileFromChooser());
         browseFilesLinkLabel.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent event) {
@@ -634,6 +701,10 @@ public final class SignatureFrame extends JFrame {
         removeFileButton.addActionListener(event -> removeSelectedFile());
         clearFilesButton.addActionListener(event -> clearFiles());
         signButton.addActionListener(event -> signFiles());
+        signingModeCombo.addActionListener(event -> {
+            refreshFileDetails();
+            updateActionState();
+        });
         fileQueueCombo.addActionListener(event -> {
             refreshFileDetails();
             updateActionState();
@@ -805,14 +876,43 @@ public final class SignatureFrame extends JFrame {
 
         List<Path> files = getQueuedFiles();
         Path outputDirectory = Path.of(outputField.getText().trim());
-        Map<Path, Path> outputTargets = resolveOutputTargets(files, outputDirectory);
+        SigningModeOption signingMode = getSelectedSigningMode();
+        if (signingMode == SigningModeOption.PDF) {
+            if (!validatePdfQueue(files)) {
+                return;
+            }
+
+            try {
+                PdfSigningDialog pdfSigningDialog = new PdfSigningDialog(selectedIdentity, outputDirectory, files);
+                pdfSigningDialog.open();
+            } catch (Exception ex) {
+                showError("Impossibile inizializzare la firma PDF: " + resolveMessage(ex));
+            }
+            return;
+        }
+
+        Map<Path, Path> outputTargets = resolveOutputTargets(files, outputDirectory, signingMode);
         if (outputTargets == null) {
             return;
         }
-        SigningProgressDialog signingDialog = new SigningProgressDialog(selectedIdentity, outputDirectory, files, outputTargets);
 
-        setBusy(true, "Firma in corso su " + files.size() + " file...");
-        appendLog("Avvio firma di " + files.size() + " file con certificato " + selectedIdentity.displayName() + ".");
+        startSigningProcess(selectedIdentity, outputDirectory, files, outputTargets, signingMode, null);
+    }
+
+    private void startSigningProcess(
+            SigningIdentity selectedIdentity,
+            Path outputDirectory,
+            List<Path> files,
+            Map<Path, Path> outputTargets,
+            SigningModeOption signingMode,
+            Map<Path, PdfSigningPlan> pdfPlans
+    ) {
+        SigningProgressDialog signingDialog = new SigningProgressDialog(selectedIdentity, outputDirectory, files, outputTargets);
+        String signingLabel = signingMode == SigningModeOption.PDF ? "PDF" : "P7M";
+
+        setBusy(true, "Firma " + signingLabel + " in corso su " + files.size() + " file...");
+        appendLog("Avvio firma " + signingLabel + " di " + files.size() + " file con certificato "
+                + selectedIdentity.displayName() + ".");
         signingDialog.open();
 
         SwingWorker<List<Path>, SigningFileUpdate> worker = new SwingWorker<>() {
@@ -822,7 +922,26 @@ public final class SignatureFrame extends JFrame {
                 for (int index = 0; index < files.size(); index++) {
                     Path file = files.get(index);
                     publish(new SigningFileUpdate(file, null, index, files.size(), false));
-                    Path result = signatureService.signFile(buildConfig(), selectedIdentity.alias(), file, outputTargets.get(file));
+                    Path result;
+                    if (signingMode == SigningModeOption.PDF) {
+                        PdfSigningPlan pdfPlan = pdfPlans == null ? null : pdfPlans.get(file);
+                        result = signatureService.signPdfFile(
+                                buildConfig(),
+                                selectedIdentity.alias(),
+                                file,
+                                outputTargets.get(file),
+                                pdfPlan == null ? null : pdfPlan.placement(),
+                                selectedIdentity.displayName(),
+                                pdfPlan != null && pdfPlan.applyToEveryPage()
+                        );
+                    } else {
+                        result = signatureService.signFile(
+                                buildConfig(),
+                                selectedIdentity.alias(),
+                                file,
+                                outputTargets.get(file)
+                        );
+                    }
                     boolean verified = signatureService.verifySignature(result);
                     results.add(result);
                     publish(new SigningFileUpdate(file, result, index + 1, files.size(), verified));
@@ -847,7 +966,7 @@ public final class SignatureFrame extends JFrame {
             protected void done() {
                 try {
                     List<Path> results = get();
-                    setBusy(false, "Firma completata: " + results.size() + " file prodotti.");
+                    setBusy(false, "Firma " + signingLabel + " completata: " + results.size() + " file prodotti.");
                     signingDialog.markSuccess(results.size());
                     clearFilesAfterSuccessfulSigning();
                 } catch (Exception ex) {
@@ -868,11 +987,252 @@ public final class SignatureFrame extends JFrame {
         return new SignatureConfig(KeyStoreMode.WINDOWS_MY, "", "");
     }
 
-    private Map<Path, Path> resolveOutputTargets(List<Path> files, Path outputDirectory) {
+    private SigningModeOption getSelectedSigningMode() {
+        Object selectedItem = signingModeCombo.getSelectedItem();
+        return selectedItem instanceof SigningModeOption mode ? mode : SigningModeOption.ENVELOPED;
+    }
+
+    private void verifySignedFileFromChooser() {
+        showVerifyQueuePopup();
+    }
+
+    private void showVerifyQueuePopup() {
+        DefaultComboBoxModel<Path> verificationModel = new DefaultComboBoxModel<>();
+        DropSurfacePanel verificationDropPanel = new DropSurfacePanel();
+        LinkLabel browseVerificationLink = new LinkLabel("NAVIGA TRA LE CARTELLE");
+        styleLinkLabel(browseVerificationLink);
+
+        JDialog dialog = new JDialog(this, "Verifica file", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setResizable(false);
+
+        JList<Path> verificationList = new JList<>(verificationModel);
+        verificationList.setCellRenderer(new PathRenderer());
+        verificationList.setVisibleRowCount(5);
+
+        JScrollPane listScrollPane = new JScrollPane(verificationList);
+        stylePopupScrollPane(listScrollPane, Color.WHITE, BorderFactory.createLineBorder(new Color(223, 227, 231)));
+
+        JLabel fileCountBadge = createInfoBadge("0 file");
+        JLabel hintLabel = createSectionSubtitle("Carica uno o piu file firmati e avvia la verifica quando la coda e completa.");
+
+        JPanel listContainer = new JPanel(new BorderLayout());
+        listContainer.setOpaque(false);
+
+        JButton clearButton = new JButton("Svuota");
+        JButton verifyActionButton = new JButton("Verifica");
+        JButton closeButton = new JButton("Chiudi");
+        styleButton(clearButton, false);
+        styleButton(verifyActionButton, true);
+        styleButton(closeButton, false);
+
+        TransferHandler verificationTransferHandler = new TransferHandler() {
+            @Override
+            public boolean canImport(TransferSupport support) {
+                boolean accepted = support.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
+                verificationDropPanel.setDragActive(support.isDrop() && accepted);
+                return accepted;
+            }
+
+            @Override
+            @SuppressWarnings("unchecked")
+            public boolean importData(TransferSupport support) {
+                if (!canImport(support)) {
+                    return false;
+                }
+
+                try {
+                    List<File> droppedFiles = (List<File>) support.getTransferable().getTransferData(DataFlavor.javaFileListFlavor);
+                    List<Path> paths = new ArrayList<>();
+                    for (File file : droppedFiles) {
+                        paths.add(file.toPath());
+                    }
+                    int addedCount = addPathsToModel(verificationModel, paths);
+                    if (addedCount > 0) {
+                        appendLog("Aggiunti " + addedCount + " file alla verifica.");
+                    }
+                    return addedCount > 0;
+                } catch (Exception ex) {
+                    showError("Impossibile acquisire i file per la verifica: " + ex.getMessage());
+                    return false;
+                } finally {
+                    verificationDropPanel.setDragActive(false);
+                    refreshVerificationQueueState(verificationModel, fileCountBadge, hintLabel, listContainer, listScrollPane, verifyActionButton, clearButton);
+                }
+            }
+        };
+
+        configureUploadDropZone(
+                verificationDropPanel,
+                "FILE DA VERIFICARE",
+                browseVerificationLink,
+                verificationTransferHandler,
+                () -> addVerificationFilesFromChooser(verificationModel, fileCountBadge, hintLabel, listContainer, listScrollPane, verifyActionButton, clearButton, dialog)
+        );
+
+        refreshVerificationQueueState(verificationModel, fileCountBadge, hintLabel, listContainer, listScrollPane, verifyActionButton, clearButton);
+
+        clearButton.addActionListener(event -> {
+            verificationModel.removeAllElements();
+            refreshVerificationQueueState(verificationModel, fileCountBadge, hintLabel, listContainer, listScrollPane, verifyActionButton, clearButton);
+        });
+        verifyActionButton.addActionListener(event -> {
+            List<Path> signedFiles = getPaths(verificationModel);
+            if (signedFiles.isEmpty()) {
+                return;
+            }
+            appendLog("Avvio verifica di " + signedFiles.size() + " file firmati.");
+            dialog.dispose();
+            showSignedFilesVerificationPopup(signedFiles, "Riepilogo dei file firmati caricati per la verifica.");
+        });
+        closeButton.addActionListener(event -> dialog.dispose());
+
+        JPanel root = new JPanel(new BorderLayout(0, 16));
+        root.setBackground(APP_BACKGROUND);
+        root.setBorder(new EmptyBorder(18, 18, 18, 18));
+
+        JPanel headerPanel = new JPanel(new BorderLayout(0, 8));
+        headerPanel.setOpaque(false);
+        headerPanel.add(createSectionTitle("Verifica file"), BorderLayout.NORTH);
+
+        JPanel headerBottom = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        headerBottom.setOpaque(false);
+        headerBottom.add(fileCountBadge);
+        headerBottom.add(hintLabel);
+        headerPanel.add(headerBottom, BorderLayout.SOUTH);
+
+        JPanel centerPanel = new JPanel();
+        centerPanel.setOpaque(false);
+        centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
+        centerPanel.add(verificationDropPanel);
+        centerPanel.add(Box.createVerticalStrut(12));
+        centerPanel.add(listContainer);
+
+        JPanel footerPanel = new JPanel(new BorderLayout());
+        footerPanel.setOpaque(false);
+        footerPanel.add(clearButton, BorderLayout.WEST);
+
+        JPanel footerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        footerActions.setOpaque(false);
+        footerActions.add(closeButton);
+        footerActions.add(verifyActionButton);
+        footerPanel.add(footerActions, BorderLayout.EAST);
+
+        root.add(headerPanel, BorderLayout.NORTH);
+        root.add(centerPanel, BorderLayout.CENTER);
+        root.add(footerPanel, BorderLayout.SOUTH);
+
+        dialog.setContentPane(root);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(760, dialog.getPreferredSize().height));
+        dialog.setSize(new Dimension(760, dialog.getPreferredSize().height));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+    private void addVerificationFilesFromChooser(
+            DefaultComboBoxModel<Path> verificationModel,
+            JLabel fileCountBadge,
+            JLabel hintLabel,
+            JPanel listContainer,
+            JScrollPane listScrollPane,
+            JButton verifyActionButton,
+            JButton clearButton,
+            JDialog dialog
+    ) {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Seleziona file firmati");
+        chooser.setMultiSelectionEnabled(true);
+        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+
+        if (chooser.showOpenDialog(dialog) == JFileChooser.APPROVE_OPTION) {
+            List<Path> paths = new ArrayList<>();
+            for (File file : chooser.getSelectedFiles()) {
+                paths.add(file.toPath());
+            }
+            int addedCount = addPathsToModel(verificationModel, paths);
+            if (addedCount > 0) {
+                appendLog("Aggiunti " + addedCount + " file alla verifica.");
+            }
+            refreshVerificationQueueState(verificationModel, fileCountBadge, hintLabel, listContainer, listScrollPane, verifyActionButton, clearButton);
+        }
+    }
+
+    private void refreshVerificationQueueState(
+            DefaultComboBoxModel<Path> verificationModel,
+            JLabel fileCountBadge,
+            JLabel hintLabel,
+            JPanel listContainer,
+            JScrollPane listScrollPane,
+            JButton verifyActionButton,
+            JButton clearButton
+    ) {
+        int fileCount = verificationModel.getSize();
+        fileCountBadge.setText(fileCount == 1 ? "1 file" : fileCount + " file");
+        hintLabel.setText(fileCount == 0
+                ? "Carica uno o piu file firmati e avvia la verifica quando la coda e completa."
+                : "Coda di verifica pronta. Premi Verifica per analizzare i file caricati.");
+
+        if (verifyActionButton != null) {
+            verifyActionButton.setEnabled(fileCount > 0);
+        }
+        if (clearButton != null) {
+            clearButton.setEnabled(fileCount > 0);
+        }
+
+        listContainer.removeAll();
+        if (fileCount == 0) {
+            JPanel emptyState = createQueueSurface();
+            emptyState.setLayout(new BorderLayout());
+            JLabel emptyLabel = new JLabel("nessun file da verificare", SwingConstants.CENTER);
+            emptyLabel.setFont(new Font("Segoe UI", Font.BOLD, 14));
+            emptyLabel.setForeground(TEXT_MUTED);
+            emptyState.add(emptyLabel, BorderLayout.CENTER);
+            emptyState.setPreferredSize(new Dimension(0, 76));
+            listContainer.add(emptyState, BorderLayout.CENTER);
+        } else {
+            listScrollPane.setPreferredSize(new Dimension(0, Math.min(220, 68 + (fileCount * 42))));
+            listContainer.add(listScrollPane, BorderLayout.CENTER);
+        }
+        listContainer.revalidate();
+        listContainer.repaint();
+    }
+
+    private int addPathsToModel(DefaultComboBoxModel<Path> model, List<Path> files) {
+        int addedCount = 0;
+        for (Path file : files) {
+            if (file == null || !Files.isRegularFile(file) || containsFile(model, file)) {
+                continue;
+            }
+            model.addElement(file);
+            addedCount++;
+        }
+        return addedCount;
+    }
+
+    private boolean containsFile(DefaultComboBoxModel<Path> model, Path candidate) {
+        for (int index = 0; index < model.getSize(); index++) {
+            Path existing = model.getElementAt(index);
+            if (existing.equals(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<Path> getPaths(DefaultComboBoxModel<Path> model) {
+        List<Path> paths = new ArrayList<>();
+        for (int index = 0; index < model.getSize(); index++) {
+            paths.add(model.getElementAt(index));
+        }
+        return List.copyOf(paths);
+    }
+
+    private Map<Path, Path> resolveOutputTargets(List<Path> files, Path outputDirectory, SigningModeOption signingMode) {
         Map<Path, Path> outputTargets = new LinkedHashMap<>();
         List<Path> conflictingFiles = new ArrayList<>();
         for (Path file : files) {
-            Path outputFile = resolveSignedOutputPath(file, outputDirectory);
+            Path outputFile = resolveSignedOutputPath(file, outputDirectory, signingMode);
             outputTargets.put(file, outputFile);
             if (Files.exists(outputFile)) {
                 conflictingFiles.add(file);
@@ -907,7 +1267,7 @@ public final class SignatureFrame extends JFrame {
                     continue;
                 }
 
-                Path renamedOutput = showRenameOutputPopup(inputFile, targetOutput, outputDirectory, outputTargets);
+                Path renamedOutput = showRenameOutputPopup(inputFile, targetOutput, outputDirectory, outputTargets, signingMode);
                 if (renamedOutput == null) {
                     continue;
                 }
@@ -998,85 +1358,263 @@ public final class SignatureFrame extends JFrame {
     }
 
     private void showExistingSignedFilePopup(Path signedFile) {
-        try {
-            SignatureService.SignedFileInspection inspection = signatureService.inspectSignedFile(signedFile);
-            boolean verified = signatureService.verifySignature(signedFile);
-
-            JDialog dialog = new JDialog(this, "Verifica file", true);
-            dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
-            dialog.setResizable(false);
-
-            JPanel root = new JPanel(new BorderLayout(0, 16));
-            root.setBackground(APP_BACKGROUND);
-            root.setBorder(new EmptyBorder(18, 18, 18, 18));
-
-            JPanel headerPanel = new JPanel(new BorderLayout(0, 8));
-            headerPanel.setOpaque(false);
-            headerPanel.add(createSectionTitle("Verifica file"), BorderLayout.NORTH);
-            headerPanel.add(createSectionSubtitle("Dettaglio del file gia presente nella cartella di output."), BorderLayout.SOUTH);
-
-            JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            badgePanel.setOpaque(false);
-            badgePanel.add(createInfoBadge(verified ? "Verifica OK" : "Verifica KO"));
-            badgePanel.add(createInfoBadge(inspection.signers().size() == 1 ? "1 firmatario" : inspection.signers().size() + " firmatari"));
-
-            JPanel summaryPanel = createQueueSurface();
-            summaryPanel.setLayout(new BoxLayout(summaryPanel, BoxLayout.Y_AXIS));
-            summaryPanel.add(createDialogDetailRow("Nome file", inspection.fileName()));
-            summaryPanel.add(createDialogDetailRow("Percorso", inspection.absolutePath().toString()));
-            summaryPanel.add(createDialogDetailRow("Data creazione", formatDateTime(inspection.creationTime())));
-            summaryPanel.add(createDialogDetailRow("Data firma", summarizeSigningTimes(inspection.signers())));
-
-            JPanel signersPanel = createQueueSurface();
-            signersPanel.setLayout(new BoxLayout(signersPanel, BoxLayout.Y_AXIS));
-            JLabel signersTitle = createFieldLabel("Firmatari");
-            signersTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-            signersPanel.add(signersTitle);
-            signersPanel.add(Box.createVerticalStrut(12));
-
-            if (inspection.signers().isEmpty()) {
-                signersPanel.add(createDialogDetailRow("Esito", "Nessun firmatario rilevato nel file selezionato."));
-            } else {
-                for (int index = 0; index < inspection.signers().size(); index++) {
-                    signersPanel.add(createSignerInfoRow(inspection.signers().get(index), index));
-                    if (index < inspection.signers().size() - 1) {
-                        signersPanel.add(Box.createVerticalStrut(10));
-                    }
-                }
-            }
-
-            JButton closeButton = new JButton("Chiudi");
-            styleButton(closeButton, false);
-            closeButton.addActionListener(event -> dialog.dispose());
-
-            JPanel footerPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
-            footerPanel.setOpaque(false);
-            footerPanel.add(closeButton);
-
-            JPanel centerPanel = new JPanel();
-            centerPanel.setOpaque(false);
-            centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
-            centerPanel.add(badgePanel);
-            centerPanel.add(Box.createVerticalStrut(12));
-            centerPanel.add(summaryPanel);
-            centerPanel.add(Box.createVerticalStrut(12));
-            centerPanel.add(signersPanel);
-
-            root.add(headerPanel, BorderLayout.NORTH);
-            root.add(centerPanel, BorderLayout.CENTER);
-            root.add(footerPanel, BorderLayout.SOUTH);
-
-            dialog.setContentPane(root);
-            dialog.pack();
-            dialog.setMinimumSize(dialog.getPreferredSize());
-            dialog.setLocationRelativeTo(this);
-            dialog.setVisible(true);
-        } catch (Exception ex) {
-            showError("Impossibile verificare il file esistente: " + resolveMessage(ex));
-        }
+        showSignedFileVerificationPopup(signedFile, "Dettaglio del file gia presente nella cartella di output.");
     }
 
-    private Path showRenameOutputPopup(Path inputFile, Path currentOutput, Path outputDirectory, Map<Path, Path> outputTargets) {
+    private void showSignedFileVerificationPopup(Path signedFile, String subtitle) {
+        showSignedFilesVerificationPopup(List.of(signedFile), subtitle);
+    }
+
+    private void showSignedFilesVerificationPopup(List<Path> signedFiles, String subtitle) {
+        if (signedFiles == null || signedFiles.isEmpty()) {
+            return;
+        }
+
+        List<SignedFileVerificationResult> results = new ArrayList<>();
+        for (Path signedFile : signedFiles) {
+            try {
+                SignatureService.SignedFileInspection inspection = signatureService.inspectSignedFile(signedFile);
+                boolean verified = signatureService.verifySignature(signedFile);
+                results.add(new SignedFileVerificationResult(signedFile, inspection, verified, null));
+            } catch (Exception ex) {
+                results.add(new SignedFileVerificationResult(signedFile, null, false, resolveMessage(ex)));
+            }
+        }
+
+        JDialog dialog = new JDialog(this, "Verifica file", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setResizable(true);
+
+        JPanel root = new JPanel(new BorderLayout(0, 16));
+        root.setBackground(APP_BACKGROUND);
+        root.setBorder(new EmptyBorder(18, 18, 18, 18));
+
+        JPanel headerPanel = new JPanel(new BorderLayout(0, 8));
+        headerPanel.setOpaque(false);
+        headerPanel.add(createSectionTitle("Verifica file"), BorderLayout.NORTH);
+        headerPanel.add(createSectionSubtitle(subtitle), BorderLayout.SOUTH);
+
+        int validCount = 0;
+        for (SignedFileVerificationResult result : results) {
+            if (result.errorMessage() == null && result.verified()) {
+                validCount++;
+            }
+        }
+
+        JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        badgePanel.setOpaque(false);
+        badgePanel.add(createInfoBadge(results.size() == 1 ? "1 file" : results.size() + " file"));
+        badgePanel.add(createInfoBadge(validCount == 1 ? "1 verifica OK" : validCount + " verifiche OK"));
+
+        JTabbedPane tabbedPane = new JTabbedPane();
+        tabbedPane.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        tabbedPane.setBackground(HEADER_SURFACE);
+        for (int index = 0; index < results.size(); index++) {
+            SignedFileVerificationResult result = results.get(index);
+            String tabTitle = result.signedFile().getFileName().toString();
+            tabbedPane.addTab(tabTitle, createSignedFileVerificationTab(result, index));
+            tabbedPane.setToolTipTextAt(index, result.signedFile().toAbsolutePath().toString());
+        }
+
+        JButton closeButton = new JButton("Chiudi");
+        styleButton(closeButton, false);
+        closeButton.addActionListener(event -> dialog.dispose());
+
+        JPanel footerPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        footerPanel.setOpaque(false);
+        footerPanel.add(closeButton);
+
+        JPanel centerPanel = new JPanel();
+        centerPanel.setOpaque(false);
+        centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
+        centerPanel.add(badgePanel);
+        centerPanel.add(Box.createVerticalStrut(12));
+        centerPanel.add(tabbedPane);
+
+        root.add(headerPanel, BorderLayout.NORTH);
+        root.add(centerPanel, BorderLayout.CENTER);
+        root.add(footerPanel, BorderLayout.SOUTH);
+
+        dialog.setContentPane(root);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(860, 760));
+        dialog.setSize(new Dimension(860, 760));
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+    private JScrollPane createSignedFileVerificationTab(SignedFileVerificationResult result, int index) {
+        JPanel contentPanel = new JPanel();
+        contentPanel.setOpaque(false);
+        contentPanel.setLayout(new BoxLayout(contentPanel, BoxLayout.Y_AXIS));
+        contentPanel.setBorder(new EmptyBorder(12, 0, 6, 0));
+
+        JPanel topBar = new JPanel(new BorderLayout(12, 0));
+        topBar.setOpaque(false);
+        topBar.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JPanel pathPanel = new JPanel();
+        pathPanel.setOpaque(false);
+        pathPanel.setLayout(new BoxLayout(pathPanel, BoxLayout.Y_AXIS));
+
+        JLabel titleLabel = new JLabel(result.signedFile().getFileName().toString());
+        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 16));
+        titleLabel.setForeground(TEXT_PRIMARY);
+        titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel pathLabel = new JLabel(result.signedFile().toAbsolutePath().toString());
+        pathLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        pathLabel.setForeground(TEXT_MUTED);
+        pathLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        pathLabel.setToolTipText(pathLabel.getText());
+
+        pathPanel.add(titleLabel);
+        pathPanel.add(Box.createVerticalStrut(4));
+        pathPanel.add(pathLabel);
+
+        JPanel actionPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actionPanel.setOpaque(false);
+        actionPanel.add(createInfoBadge("FILE " + (index + 1)));
+        if (result.errorMessage() == null) {
+            actionPanel.add(createInfoBadge(result.verified() ? "VERIFICA OK" : "VERIFICA KO"));
+            JButton openButton = new JButton("Visualizza documento");
+            styleButton(openButton, false);
+            openButton.setEnabled(result.inspection().embeddedContent().length > 0);
+            openButton.addActionListener(event -> openEmbeddedContent(result.inspection()));
+            actionPanel.add(openButton);
+        } else {
+            JLabel errorBadge = createInfoBadge("ERRORE");
+            errorBadge.setBackground(CERTIFICATE_BADGE_EMPTY);
+            errorBadge.setForeground(Color.WHITE);
+            actionPanel.add(errorBadge);
+        }
+
+        topBar.add(pathPanel, BorderLayout.CENTER);
+        topBar.add(actionPanel, BorderLayout.EAST);
+
+        contentPanel.add(topBar);
+        contentPanel.add(Box.createVerticalStrut(12));
+
+        if (result.errorMessage() != null) {
+            JPanel errorPanel = createQueueSurface();
+            errorPanel.setLayout(new BoxLayout(errorPanel, BoxLayout.Y_AXIS));
+            errorPanel.add(createDialogDetailRow("Errore", result.errorMessage()));
+            fitVerificationBlock(errorPanel);
+            contentPanel.add(errorPanel);
+            JScrollPane tabScrollPane = new JScrollPane(contentPanel);
+            stylePopupScrollPane(tabScrollPane, APP_BACKGROUND, BorderFactory.createEmptyBorder());
+            tabScrollPane.getViewport().setOpaque(false);
+            return tabScrollPane;
+        }
+
+        SignatureService.SignedFileInspection inspection = result.inspection();
+
+        JPanel signersPanel = createQueueSurface();
+        signersPanel.setLayout(new BoxLayout(signersPanel, BoxLayout.Y_AXIS));
+        JLabel signersTitle = createFieldLabel("Firmatari");
+        signersTitle.setAlignmentX(Component.LEFT_ALIGNMENT);
+        signersPanel.add(signersTitle);
+        signersPanel.add(Box.createVerticalStrut(12));
+
+        if (inspection.signers().isEmpty()) {
+            signersPanel.add(createDialogDetailRow("Esito", "Nessun firmatario rilevato nel file selezionato."));
+        } else {
+            for (int signerIndex = 0; signerIndex < inspection.signers().size(); signerIndex++) {
+                signersPanel.add(createSignerInfoRow(inspection.signers().get(signerIndex), signerIndex));
+                if (signerIndex < inspection.signers().size() - 1) {
+                    signersPanel.add(Box.createVerticalStrut(10));
+                }
+            }
+        }
+        fitVerificationBlock(signersPanel);
+
+        JPanel infoPanel = createCompactVerificationInfoPanel(inspection);
+
+        contentPanel.add(signersPanel);
+        contentPanel.add(Box.createVerticalStrut(12));
+        contentPanel.add(infoPanel);
+
+        JScrollPane tabScrollPane = new JScrollPane(contentPanel);
+        stylePopupScrollPane(tabScrollPane, APP_BACKGROUND, BorderFactory.createEmptyBorder());
+        tabScrollPane.getViewport().setOpaque(false);
+        return tabScrollPane;
+    }
+
+    private JPanel createCompactVerificationInfoPanel(SignatureService.SignedFileInspection inspection) {
+        JPanel infoPanel = createQueueSurface();
+        infoPanel.setLayout(new GridBagLayout());
+
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridx = 0;
+        constraints.gridy = 0;
+        constraints.anchor = GridBagConstraints.WEST;
+        constraints.insets = new Insets(0, 0, 10, 16);
+        infoPanel.add(createCompactInfoLabel("Data creazione"), constraints);
+
+        constraints.gridx = 1;
+        constraints.weightx = 1;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 10, 0);
+        infoPanel.add(createCompactInfoValue(formatDateTime(inspection.creationTime())), constraints);
+
+        constraints.gridx = 0;
+        constraints.gridy = 1;
+        constraints.weightx = 0;
+        constraints.fill = GridBagConstraints.NONE;
+        constraints.insets = new Insets(0, 0, 10, 16);
+        infoPanel.add(createCompactInfoLabel("Data firma"), constraints);
+
+        constraints.gridx = 1;
+        constraints.weightx = 1;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 10, 0);
+        infoPanel.add(createCompactInfoValue(summarizeSigningTimes(inspection.signers())), constraints);
+
+        constraints.gridx = 0;
+        constraints.gridy = 2;
+        constraints.weightx = 0;
+        constraints.fill = GridBagConstraints.NONE;
+        constraints.insets = new Insets(0, 0, 0, 16);
+        infoPanel.add(createCompactInfoLabel("Contenuto"), constraints);
+
+        constraints.gridx = 1;
+        constraints.weightx = 1;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 0, 0);
+        infoPanel.add(createCompactInfoValue(inspection.contentTypeLabel() + "  |  " + formatSize(inspection.embeddedContent().length)), constraints);
+
+        fitVerificationBlock(infoPanel);
+        return infoPanel;
+    }
+
+    private JLabel createCompactInfoLabel(String text) {
+        JLabel label = new JLabel(text.toUpperCase());
+        label.setFont(new Font("Segoe UI", Font.BOLD, 10));
+        label.setForeground(TEXT_MUTED);
+        return label;
+    }
+
+    private JLabel createCompactInfoValue(String text) {
+        JLabel label = new JLabel(text == null || text.isBlank() ? "-" : text);
+        label.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        label.setForeground(TEXT_PRIMARY);
+        label.setToolTipText(label.getText());
+        return label;
+    }
+
+    private void fitVerificationBlock(JPanel panel) {
+        panel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        Dimension preferredSize = panel.getPreferredSize();
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, preferredSize.height));
+    }
+
+    private Path showRenameOutputPopup(
+            Path inputFile,
+            Path currentOutput,
+            Path outputDirectory,
+            Map<Path, Path> outputTargets,
+            SigningModeOption signingMode
+    ) {
         Path[] selectedOutput = new Path[1];
 
         JDialog dialog = new JDialog(this, "Rinomina output", true);
@@ -1133,7 +1671,7 @@ public final class SignatureFrame extends JFrame {
                 return;
             }
 
-            String normalizedName = rawName.endsWith(".p7m") ? rawName : rawName + ".p7m";
+            String normalizedName = normalizeOutputFileName(rawName, signingMode);
             if (hasInvalidFileNameChars(normalizedName) || normalizedName.contains("\\") || normalizedName.contains("/")) {
                 errorLabel.setText("Il nome contiene caratteri non validi.");
                 return;
@@ -1245,8 +1783,118 @@ public final class SignatureFrame extends JFrame {
         return row;
     }
 
+    private void openEmbeddedContent(SignatureService.SignedFileInspection inspection) {
+        try {
+            if (inspection.embeddedContent().length == 0) {
+                showError("Il file firmato non contiene un contenuto incorporato.");
+                return;
+            }
+            if (!Desktop.isDesktopSupported()) {
+                showError("L'apertura del contenuto non e supportata in questo ambiente.");
+                return;
+            }
+
+            String baseName = inspection.fileName().endsWith(".p7m")
+                    ? inspection.fileName().substring(0, inspection.fileName().length() - 4)
+                    : inspection.fileName();
+            String safePrefix = sanitizeFileStem(baseName);
+            if (safePrefix.length() < 3) {
+                safePrefix = "ofm";
+            }
+
+            Path extractedFile = Files.createTempFile(safePrefix + "-", inspection.suggestedExtension());
+            Files.write(extractedFile, inspection.embeddedContent());
+            extractedFile.toFile().deleteOnExit();
+            Desktop.getDesktop().open(extractedFile.toFile());
+            appendLog("Contenuto estratto per verifica in " + extractedFile + ".");
+        } catch (Exception ex) {
+            showError("Impossibile aprire il contenuto incorporato: " + resolveMessage(ex));
+        }
+    }
+
+    private String sanitizeFileStem(String value) {
+        String sanitized = value.replaceAll("[^a-zA-Z0-9._-]", "_");
+        return sanitized.length() > 40 ? sanitized.substring(0, 40) : sanitized;
+    }
+
     private Path resolveSignedOutputPath(Path inputFile, Path outputDirectory) {
-        return outputDirectory.resolve(inputFile.getFileName().toString() + ".p7m");
+        return resolveSignedOutputPath(inputFile, outputDirectory, getSelectedSigningMode());
+    }
+
+    private Path resolveSignedOutputPath(Path inputFile, Path outputDirectory, SigningModeOption signingMode) {
+        return outputDirectory.resolve(resolveSignedOutputFileName(inputFile, outputDirectory, signingMode));
+    }
+
+    private String resolveSignedOutputFileName(Path inputFile, Path outputDirectory, SigningModeOption signingMode) {
+        String fileName = inputFile.getFileName().toString();
+        if (signingMode == SigningModeOption.PDF) {
+            String normalizedPdfName = fileName.toLowerCase(Locale.ROOT).endsWith(".pdf") ? fileName : fileName + ".pdf";
+            Path targetPath = outputDirectory.resolve(normalizedPdfName).toAbsolutePath().normalize();
+            if (targetPath.equals(inputFile.toAbsolutePath().normalize())) {
+                return stripTrailingExtension(normalizedPdfName) + "_firmato.pdf";
+            }
+            return normalizedPdfName;
+        }
+        return fileName + ".p7m";
+    }
+
+    private String normalizeOutputFileName(String rawName, SigningModeOption signingMode) {
+        String trimmedName = rawName.trim();
+        String expectedExtension = signingMode == SigningModeOption.PDF ? ".pdf" : ".p7m";
+        if (trimmedName.toLowerCase(Locale.ROOT).endsWith(expectedExtension)) {
+            return trimmedName;
+        }
+        if (signingMode == SigningModeOption.PDF && trimmedName.contains(".")) {
+            trimmedName = stripTrailingExtension(trimmedName);
+        }
+        return trimmedName + expectedExtension;
+    }
+
+    private String stripTrailingExtension(String value) {
+        int extensionSeparatorIndex = value.lastIndexOf('.');
+        if (extensionSeparatorIndex <= 0) {
+            return value;
+        }
+        return value.substring(0, extensionSeparatorIndex);
+    }
+
+    private boolean validatePdfQueue(List<Path> files) {
+        List<String> invalidFiles = new ArrayList<>();
+        for (Path file : files) {
+            if (isPdfFile(file)) {
+                continue;
+            }
+            invalidFiles.add(file.getFileName().toString());
+        }
+
+        if (invalidFiles.isEmpty()) {
+            return true;
+        }
+
+        showError("La modalita PDF accetta solo documenti PDF. File non compatibili: " + String.join(", ", invalidFiles));
+        return false;
+    }
+
+    private boolean isPdfFile(Path file) {
+        String lowerCaseName = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (lowerCaseName.endsWith(".pdf")) {
+            return true;
+        }
+
+        if (!Files.isRegularFile(file)) {
+            return false;
+        }
+
+        try (var inputStream = Files.newInputStream(file)) {
+            byte[] header = inputStream.readNBytes(4);
+            return header.length == 4
+                    && header[0] == '%'
+                    && header[1] == 'P'
+                    && header[2] == 'D'
+                    && header[3] == 'F';
+        } catch (IOException ex) {
+            return false;
+        }
     }
 
     private boolean isDuplicatePlannedOutput(Path currentInputFile, Path candidateOutput, Map<Path, Path> outputTargets) {
@@ -1348,7 +1996,11 @@ public final class SignatureFrame extends JFrame {
                 .append("Nome: ").append(selectedFile.getFileName()).append(System.lineSeparator())
                 .append("Percorso: ").append(selectedFile.toAbsolutePath()).append(System.lineSeparator())
                 .append("Output previsto: ")
-                .append(Path.of(outputField.getText().isBlank() ? "." : outputField.getText().trim()).resolve(selectedFile.getFileName().toString() + ".p7m"))
+                .append(resolveSignedOutputPath(
+                        selectedFile,
+                        Path.of(outputField.getText().isBlank() ? "." : outputField.getText().trim()),
+                        getSelectedSigningMode()
+                ))
                 .append(System.lineSeparator());
 
         try {
@@ -1564,10 +2216,12 @@ public final class SignatureFrame extends JFrame {
         boolean hasCertificate = identityCombo.getItemCount() > 0 && identityCombo.getSelectedItem() != null;
 
         identityCombo.setEnabled(!busy);
+        signingModeCombo.setEnabled(!busy);
         outputField.setEnabled(!busy);
         certificateInfoIcon.setEnabled(!busy && hasCertificate);
         loadCertificatesButton.setEnabled(!busy);
         browseFilesLinkLabel.setEnabled(!busy);
+        verifyButton.setEnabled(!busy);
         fileQueueCombo.setEnabled(!busy && hasFiles);
         fileQueueCombo.setVisible(hasFiles);
         activeAssetLabel.setVisible(hasFiles);
@@ -1619,9 +2273,8 @@ public final class SignatureFrame extends JFrame {
         popupLogArea.setCaretPosition(popupLogArea.getDocument().getLength());
 
         JScrollPane scrollPane = new JScrollPane(popupLogArea);
-        scrollPane.setBorder(BorderFactory.createLineBorder(CARD_BORDER));
+        stylePopupScrollPane(scrollPane, logArea.getBackground(), BorderFactory.createLineBorder(CARD_BORDER));
         scrollPane.setPreferredSize(new Dimension(760, 360));
-        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
         JButton closeButton = new JButton("Chiudi");
         styleButton(closeButton, false);
@@ -1642,6 +2295,20 @@ public final class SignatureFrame extends JFrame {
     }
 
     private record SigningFileUpdate(Path inputFile, Path outputFile, int completedCount, int totalCount, boolean verified) {
+    }
+
+    private record SignedFileVerificationResult(
+            Path signedFile,
+            SignatureService.SignedFileInspection inspection,
+            boolean verified,
+            String errorMessage
+    ) {
+    }
+
+    private record PdfSigningPlan(
+            SignatureService.PdfVisibleSignaturePlacement placement,
+            boolean applyToEveryPage
+    ) {
     }
 
     private enum OverwriteDialogChoice {
@@ -1740,11 +2407,8 @@ public final class SignatureFrame extends JFrame {
             }
 
             JScrollPane listScrollPane = new JScrollPane(fileListPanel);
-            listScrollPane.setBorder(BorderFactory.createEmptyBorder());
-            listScrollPane.getViewport().setBackground(APP_BACKGROUND);
+            stylePopupScrollPane(listScrollPane, APP_BACKGROUND, BorderFactory.createEmptyBorder());
             listScrollPane.setPreferredSize(new Dimension(610, Math.min(320, 98 + (files.size() * 92))));
-            listScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-            listScrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
             closeButton.setEnabled(false);
             styleButton(closeButton, false);
@@ -1899,6 +2563,678 @@ public final class SignatureFrame extends JFrame {
         }
     }
 
+    private final class PdfSigningDialog {
+        private static final float PDF_ZOOM_FACTOR_MIN = 0.55f;
+        private static final float PDF_ZOOM_FACTOR_MAX = 2.8f;
+        private static final float PDF_ZOOM_FACTOR_STEP = 1.18f;
+
+        private final SigningIdentity identity;
+        private final Path outputDirectory;
+        private final List<Path> files;
+        private final JDialog dialog;
+        private final JTabbedPane documentTabs = new JTabbedPane();
+        private final JButton previousPageButton = new JButton("Pagina precedente");
+        private final JButton nextPageButton = new JButton("Pagina successiva");
+        private final JButton zoomOutButton = new JButton("-");
+        private final JButton zoomInButton = new JButton("+");
+        private final JButton fitWidthButton = new JButton("Adatta larghezza");
+        private final JButton resetPlacementButton = new JButton("Ripristina posizione");
+        private final JButton cancelButton = new JButton("Annulla");
+        private final JButton startButton = new JButton("Avvia firma");
+        private final JCheckBox signEveryPageCheckBox = new JCheckBox("Firma su ogni pagina");
+        private final JLabel currentPageLabel = new JLabel();
+        private final JLabel zoomValueLabel = new JLabel("100%");
+        private final PdfPreviewSurface previewSurface = new PdfPreviewSurface();
+        private final JPanel previewWrapper = new JPanel(new GridBagLayout());
+        private final JScrollPane previewScrollPane = new JScrollPane(previewWrapper);
+        private final Map<Path, PdfDocumentContext> documentContexts = new LinkedHashMap<>();
+        private final Map<Path, SignatureService.PdfVisibleSignaturePlacement> placements = new LinkedHashMap<>();
+        private final Map<Path, Float> zoomFactors = new LinkedHashMap<>();
+        private final Map<Path, Boolean> signEveryPageFlags = new LinkedHashMap<>();
+        private PageRenderContext currentRenderContext;
+        private Path currentFile;
+        private boolean syncingState;
+        private int lastViewportWidth;
+
+        private PdfSigningDialog(SigningIdentity identity, Path outputDirectory, List<Path> files) throws Exception {
+            this.identity = identity;
+            this.outputDirectory = outputDirectory;
+            this.files = List.copyOf(files);
+            this.dialog = new JDialog(SignatureFrame.this, "Firma PDF", true);
+
+            dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+            dialog.setResizable(true);
+            dialog.addWindowListener(new WindowAdapter() {
+                @Override
+                public void windowClosed(WindowEvent event) {
+                    closeDocumentContexts();
+                }
+            });
+
+            initializeDocumentContexts();
+
+            styleButton(previousPageButton, false);
+            styleButton(nextPageButton, false);
+            styleButton(zoomOutButton, false);
+            styleButton(zoomInButton, false);
+            styleButton(fitWidthButton, false);
+            styleButton(resetPlacementButton, false);
+            styleButton(cancelButton, false);
+            styleButton(startButton, true);
+            styleToggleControl(signEveryPageCheckBox);
+
+            zoomOutButton.setPreferredSize(new Dimension(46, zoomOutButton.getPreferredSize().height));
+            zoomInButton.setPreferredSize(new Dimension(46, zoomInButton.getPreferredSize().height));
+            currentPageLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+            currentPageLabel.setForeground(TEXT_PRIMARY);
+            zoomValueLabel.setHorizontalAlignment(SwingConstants.CENTER);
+            styleBadge(zoomValueLabel, new Color(241, 244, 246), TEXT_MUTED);
+
+            documentTabs.setFont(new Font("Segoe UI", Font.BOLD, 12));
+            documentTabs.setBackground(HEADER_SURFACE);
+            documentTabs.setForeground(TEXT_PRIMARY);
+            documentTabs.setOpaque(false);
+            documentTabs.setFocusable(false);
+            documentTabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+
+            previousPageButton.addActionListener(event -> shiftPage(-1));
+            nextPageButton.addActionListener(event -> shiftPage(1));
+            zoomOutButton.addActionListener(event -> adjustZoom(false));
+            zoomInButton.addActionListener(event -> adjustZoom(true));
+            fitWidthButton.addActionListener(event -> resetZoomToFitWidth());
+            resetPlacementButton.addActionListener(event -> resetPlacement());
+            cancelButton.addActionListener(event -> dialog.dispose());
+            startButton.addActionListener(event -> confirmAndStartSigning());
+            signEveryPageCheckBox.addActionListener(event -> {
+                if (!syncingState && currentFile != null) {
+                    signEveryPageFlags.put(currentFile, signEveryPageCheckBox.isSelected());
+                }
+            });
+            documentTabs.addChangeListener(event -> {
+                if (syncingState) {
+                    return;
+                }
+                int selectedIndex = documentTabs.getSelectedIndex();
+                if (selectedIndex >= 0 && selectedIndex < files.size()) {
+                    selectDocument(files.get(selectedIndex));
+                }
+            });
+            previewScrollPane.getViewport().addComponentListener(new ComponentAdapter() {
+                @Override
+                public void componentResized(ComponentEvent event) {
+                    int viewportWidth = previewScrollPane.getViewport().getExtentSize().width;
+                    if (viewportWidth <= 0 || viewportWidth == lastViewportWidth) {
+                        return;
+                    }
+                    lastViewportWidth = viewportWidth;
+                    if (currentFile != null) {
+                        refreshCurrentPreview();
+                    }
+                }
+            });
+
+            previewWrapper.setOpaque(false);
+            previewWrapper.setBorder(new EmptyBorder(18, 18, 18, 18));
+            previewWrapper.add(previewSurface);
+
+            stylePopupScrollPane(
+                    previewScrollPane,
+                    new Color(250, 252, 252),
+                    BorderFactory.createLineBorder(CARD_BORDER)
+            );
+            previewScrollPane.setPreferredSize(new Dimension(760, 620));
+            previewScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+            previewScrollPane.getHorizontalScrollBar().setUnitIncrement(18);
+            previewScrollPane.getHorizontalScrollBar().setOpaque(false);
+            previewScrollPane.getHorizontalScrollBar().setPreferredSize(new Dimension(0, 16));
+            previewScrollPane.getHorizontalScrollBar().setUI(new AppScrollBarUI());
+
+            JPanel root = new JPanel(new BorderLayout(0, 16));
+            root.setBackground(APP_BACKGROUND);
+            root.setBorder(new EmptyBorder(18, 18, 18, 18));
+
+            JPanel headerPanel = new JPanel(new BorderLayout(0, 8));
+            headerPanel.setOpaque(false);
+            headerPanel.add(createSectionTitle("Firma PDF"), BorderLayout.NORTH);
+            headerPanel.add(
+                    createSectionSubtitle("Posiziona la firma visibile sui documenti PDF prima di avviare il motore PAdES."),
+                    BorderLayout.SOUTH
+            );
+
+            JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            badgePanel.setOpaque(false);
+            badgePanel.add(createInfoBadge(this.files.size() == 1 ? "1 PDF" : this.files.size() + " PDF"));
+            badgePanel.add(createInfoBadge("PAdES"));
+
+            JPanel leftToolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            leftToolbar.setOpaque(false);
+            leftToolbar.add(previousPageButton);
+            leftToolbar.add(currentPageLabel);
+            leftToolbar.add(nextPageButton);
+            leftToolbar.add(Box.createHorizontalStrut(10));
+            leftToolbar.add(zoomOutButton);
+            leftToolbar.add(zoomValueLabel);
+            leftToolbar.add(zoomInButton);
+            leftToolbar.add(fitWidthButton);
+
+            JPanel rightToolbar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+            rightToolbar.setOpaque(false);
+            rightToolbar.add(signEveryPageCheckBox);
+            rightToolbar.add(resetPlacementButton);
+
+            JPanel toolbarPanel = new JPanel(new BorderLayout(12, 0));
+            toolbarPanel.setOpaque(false);
+            toolbarPanel.add(leftToolbar, BorderLayout.WEST);
+            toolbarPanel.add(rightToolbar, BorderLayout.EAST);
+
+            JPanel viewerPanel = createQueueSurface();
+            viewerPanel.setLayout(new BorderLayout(0, 14));
+
+            JPanel viewerHeader = new JPanel(new BorderLayout(0, 12));
+            viewerHeader.setOpaque(false);
+            viewerHeader.add(documentTabs, BorderLayout.NORTH);
+            viewerHeader.add(toolbarPanel, BorderLayout.SOUTH);
+
+            viewerPanel.add(viewerHeader, BorderLayout.NORTH);
+            viewerPanel.add(previewScrollPane, BorderLayout.CENTER);
+
+            JPanel footerPanel = new JPanel(new BorderLayout());
+            footerPanel.setOpaque(false);
+            footerPanel.add(badgePanel, BorderLayout.WEST);
+
+            JPanel footerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+            footerActions.setOpaque(false);
+            footerActions.add(cancelButton);
+            footerActions.add(startButton);
+            footerPanel.add(footerActions, BorderLayout.EAST);
+
+            root.add(headerPanel, BorderLayout.NORTH);
+            root.add(viewerPanel, BorderLayout.CENTER);
+            root.add(footerPanel, BorderLayout.SOUTH);
+
+            dialog.setContentPane(root);
+            if (!this.files.isEmpty()) {
+                syncingState = true;
+                documentTabs.setSelectedIndex(0);
+                syncingState = false;
+                selectDocument(this.files.get(0));
+            }
+        }
+
+        private void open() {
+            dialog.pack();
+            dialog.setMinimumSize(new Dimension(1020, 820));
+            dialog.setSize(new Dimension(1080, 860));
+            dialog.setLocationRelativeTo(SignatureFrame.this);
+            SwingUtilities.invokeLater(this::refreshCurrentPreview);
+            dialog.setVisible(true);
+        }
+
+        private void initializeDocumentContexts() throws Exception {
+            try {
+                for (Path file : files) {
+                    PdfDocumentContext context = new PdfDocumentContext(file, Loader.loadPDF(file.toFile()));
+                    documentContexts.put(file, context);
+                    placements.put(file, createDefaultPlacement(context, 0));
+                    zoomFactors.put(file, 1f);
+                    signEveryPageFlags.put(file, Boolean.FALSE);
+                    documentTabs.addTab(file.getFileName().toString(), createTabPlaceholder());
+                    documentTabs.setToolTipTextAt(documentTabs.getTabCount() - 1, file.toAbsolutePath().toString());
+                }
+            } catch (Exception ex) {
+                closeDocumentContexts();
+                throw ex;
+            }
+        }
+
+        private JPanel createTabPlaceholder() {
+            JPanel panel = new JPanel();
+            panel.setOpaque(false);
+            panel.setPreferredSize(new Dimension(0, 0));
+            panel.setMinimumSize(new Dimension(0, 0));
+            panel.setMaximumSize(new Dimension(0, 0));
+            return panel;
+        }
+
+        private void closeDocumentContexts() {
+            for (PdfDocumentContext context : documentContexts.values()) {
+                try {
+                    context.close();
+                } catch (IOException ignored) {
+                    // Un eventuale errore in chiusura non deve bloccare il rilascio del popup.
+                }
+            }
+            documentContexts.clear();
+        }
+
+        private void selectDocument(Path file) {
+            if (file == null) {
+                return;
+            }
+
+            currentFile = file;
+            syncingState = true;
+            signEveryPageCheckBox.setSelected(Boolean.TRUE.equals(signEveryPageFlags.getOrDefault(file, Boolean.FALSE)));
+            syncingState = false;
+            refreshCurrentPreview();
+        }
+
+        private void shiftPage(int delta) {
+            if (currentFile == null) {
+                return;
+            }
+
+            PdfDocumentContext context = documentContexts.get(currentFile);
+            SignatureService.PdfVisibleSignaturePlacement currentPlacement = placements.get(currentFile);
+            int nextPageIndex = Math.max(0, Math.min(context.getPageCount() - 1, currentPlacement.pageIndex() + delta));
+            if (nextPageIndex == currentPlacement.pageIndex()) {
+                return;
+            }
+
+            placements.put(currentFile, remapPlacement(context, currentPlacement, nextPageIndex));
+            refreshCurrentPreview();
+        }
+
+        private void adjustZoom(boolean zoomIn) {
+            if (currentFile == null) {
+                return;
+            }
+
+            float currentZoom = zoomFactors.getOrDefault(currentFile, 1f);
+            float nextZoom = zoomIn
+                    ? Math.min(PDF_ZOOM_FACTOR_MAX, currentZoom * PDF_ZOOM_FACTOR_STEP)
+                    : Math.max(PDF_ZOOM_FACTOR_MIN, currentZoom / PDF_ZOOM_FACTOR_STEP);
+            if (Math.abs(nextZoom - currentZoom) < 0.001f) {
+                return;
+            }
+
+            zoomFactors.put(currentFile, nextZoom);
+            refreshCurrentPreview();
+        }
+
+        private void resetZoomToFitWidth() {
+            if (currentFile == null) {
+                return;
+            }
+
+            zoomFactors.put(currentFile, 1f);
+            refreshCurrentPreview();
+        }
+
+        private void resetPlacement() {
+            if (currentFile == null) {
+                return;
+            }
+
+            PdfDocumentContext context = documentContexts.get(currentFile);
+            SignatureService.PdfVisibleSignaturePlacement currentPlacement = placements.get(currentFile);
+            placements.put(currentFile, createDefaultPlacement(context, currentPlacement.pageIndex()));
+            refreshCurrentPreview();
+        }
+
+        private SignatureService.PdfVisibleSignaturePlacement createDefaultPlacement(PdfDocumentContext context, int pageIndex) {
+            PDRectangle pageBox = context.getPageBox(pageIndex);
+            float maxWidth = Math.max(90f, pageBox.getWidth() - (PDF_SIGNATURE_MARGIN * 2f));
+            float maxHeight = Math.max(42f, pageBox.getHeight() - (PDF_SIGNATURE_MARGIN * 2f));
+            float width = Math.min(PDF_SIGNATURE_DEFAULT_WIDTH, maxWidth);
+            float height = Math.min(PDF_SIGNATURE_DEFAULT_HEIGHT, maxHeight);
+            float x = Math.max(PDF_SIGNATURE_MARGIN, pageBox.getWidth() - width - PDF_SIGNATURE_MARGIN);
+            float y = Math.max(PDF_SIGNATURE_MARGIN, pageBox.getHeight() - height - PDF_SIGNATURE_MARGIN);
+            return new SignatureService.PdfVisibleSignaturePlacement(pageIndex, x, y, width, height);
+        }
+
+        private SignatureService.PdfVisibleSignaturePlacement remapPlacement(
+                PdfDocumentContext context,
+                SignatureService.PdfVisibleSignaturePlacement placement,
+                int targetPageIndex
+        ) {
+            PDRectangle sourcePageBox = context.getPageBox(placement.pageIndex());
+            PDRectangle targetPageBox = context.getPageBox(targetPageIndex);
+
+            float widthRatio = placement.width() / sourcePageBox.getWidth();
+            float heightRatio = placement.height() / sourcePageBox.getHeight();
+            float xRatio = placement.x() / sourcePageBox.getWidth();
+            float yRatio = placement.y() / sourcePageBox.getHeight();
+
+            float width = Math.max(72f, Math.min(targetPageBox.getWidth() - (PDF_SIGNATURE_MARGIN * 2f), targetPageBox.getWidth() * widthRatio));
+            float height = Math.max(36f, Math.min(targetPageBox.getHeight() - (PDF_SIGNATURE_MARGIN * 2f), targetPageBox.getHeight() * heightRatio));
+            float x = Math.max(PDF_SIGNATURE_MARGIN,
+                    Math.min(targetPageBox.getWidth() - width - PDF_SIGNATURE_MARGIN, targetPageBox.getWidth() * xRatio));
+            float y = Math.max(PDF_SIGNATURE_MARGIN,
+                    Math.min(targetPageBox.getHeight() - height - PDF_SIGNATURE_MARGIN, targetPageBox.getHeight() * yRatio));
+            return new SignatureService.PdfVisibleSignaturePlacement(targetPageIndex, x, y, width, height);
+        }
+
+        private void refreshCurrentPreview() {
+            if (currentFile == null) {
+                return;
+            }
+
+            PdfDocumentContext context = documentContexts.get(currentFile);
+            SignatureService.PdfVisibleSignaturePlacement placement = placements.get(currentFile);
+            if (placement == null) {
+                placement = createDefaultPlacement(context, 0);
+                placements.put(currentFile, placement);
+            }
+
+            currentRenderContext = context.renderPage(placement.pageIndex(), resolvePreviewRenderScale(context, placement.pageIndex()));
+            previewSurface.setPreview(
+                    currentRenderContext.image(),
+                    convertPlacementToDisplayRectangle(placement, currentRenderContext)
+            );
+            previewSurface.revalidate();
+
+            currentPageLabel.setText("Pagina " + (placement.pageIndex() + 1) + " / " + context.getPageCount());
+            previousPageButton.setEnabled(placement.pageIndex() > 0);
+            nextPageButton.setEnabled(placement.pageIndex() < context.getPageCount() - 1);
+
+            float zoomFactor = zoomFactors.getOrDefault(currentFile, 1f);
+            zoomValueLabel.setText(Math.round(zoomFactor * 100f) + "%");
+            zoomOutButton.setEnabled(zoomFactor > PDF_ZOOM_FACTOR_MIN + 0.01f);
+            zoomInButton.setEnabled(zoomFactor < PDF_ZOOM_FACTOR_MAX - 0.01f);
+            fitWidthButton.setEnabled(Math.abs(zoomFactor - 1f) > 0.01f);
+        }
+
+        private float resolvePreviewRenderScale(PdfDocumentContext context, int pageIndex) {
+            PDRectangle pageBox = context.getPageBox(pageIndex);
+            int viewportWidth = previewScrollPane.getViewport().getExtentSize().width;
+            if (viewportWidth <= 0) {
+                viewportWidth = previewScrollPane.getPreferredSize().width;
+            }
+
+            int usableWidth = Math.max(360, viewportWidth - 48);
+            float fitWidthScale = usableWidth / pageBox.getWidth();
+            float zoomFactor = zoomFactors.getOrDefault(currentFile, 1f);
+            float renderScale = fitWidthScale * zoomFactor;
+            return Math.max(0.5f, Math.min(renderScale, 4.5f));
+        }
+
+        private Rectangle convertPlacementToDisplayRectangle(
+                SignatureService.PdfVisibleSignaturePlacement placement,
+                PageRenderContext renderContext
+        ) {
+            double scaleX = renderContext.image().getWidth() / renderContext.pageWidth();
+            double scaleY = renderContext.image().getHeight() / renderContext.pageHeight();
+
+            int x = (int) Math.round(placement.x() * scaleX);
+            int y = (int) Math.round(placement.y() * scaleY);
+            int width = Math.max(1, (int) Math.round(placement.width() * scaleX));
+            int height = Math.max(1, (int) Math.round(placement.height() * scaleY));
+            return new Rectangle(x, y, width, height);
+        }
+
+        private void updateCurrentPlacementFromDisplayRectangle(Rectangle displayRectangle) {
+            if (currentFile == null || currentRenderContext == null || displayRectangle == null) {
+                return;
+            }
+
+            Rectangle boundedRectangle = clampRectangleToImage(displayRectangle, currentRenderContext.image());
+            double scaleX = currentRenderContext.pageWidth() / currentRenderContext.image().getWidth();
+            double scaleY = currentRenderContext.pageHeight() / currentRenderContext.image().getHeight();
+
+            float x = (float) (boundedRectangle.x * scaleX);
+            float y = (float) (boundedRectangle.y * scaleY);
+            float width = (float) Math.max(1d, boundedRectangle.width * scaleX);
+            float height = (float) Math.max(1d, boundedRectangle.height * scaleY);
+
+            placements.put(currentFile, new SignatureService.PdfVisibleSignaturePlacement(
+                    placements.get(currentFile).pageIndex(),
+                    x,
+                    y,
+                    width,
+                    height
+            ));
+        }
+
+        private Rectangle clampRectangleToImage(Rectangle rectangle, BufferedImage image) {
+            int maxX = Math.max(0, image.getWidth() - rectangle.width);
+            int maxY = Math.max(0, image.getHeight() - rectangle.height);
+            int x = Math.max(0, Math.min(rectangle.x, maxX));
+            int y = Math.max(0, Math.min(rectangle.y, maxY));
+            int width = Math.max(1, Math.min(rectangle.width, image.getWidth()));
+            int height = Math.max(1, Math.min(rectangle.height, image.getHeight()));
+            if (x + width > image.getWidth()) {
+                width = image.getWidth() - x;
+            }
+            if (y + height > image.getHeight()) {
+                height = image.getHeight() - y;
+            }
+            return new Rectangle(x, y, width, height);
+        }
+
+        private void confirmAndStartSigning() {
+            Map<Path, Path> outputTargets = resolveOutputTargets(files, outputDirectory, SigningModeOption.PDF);
+            if (outputTargets == null) {
+                return;
+            }
+
+            Map<Path, PdfSigningPlan> pdfPlans = new LinkedHashMap<>();
+            for (Path file : files) {
+                SignatureService.PdfVisibleSignaturePlacement placement = placements.get(file);
+                if (placement == null) {
+                    showError("Definisci la posizione della firma per tutti i PDF prima di procedere.");
+                    return;
+                }
+                pdfPlans.put(file, new PdfSigningPlan(
+                        placement,
+                        Boolean.TRUE.equals(signEveryPageFlags.getOrDefault(file, Boolean.FALSE))
+                ));
+            }
+
+            dialog.dispose();
+            startSigningProcess(
+                    identity,
+                    outputDirectory,
+                    files,
+                    outputTargets,
+                    SigningModeOption.PDF,
+                    Map.copyOf(pdfPlans)
+            );
+        }
+
+        private final class PdfPreviewSurface extends JComponent {
+            private static final int MIN_SELECTION_WIDTH = 40;
+            private static final int MIN_SELECTION_HEIGHT = 20;
+
+            private BufferedImage pageImage;
+            private Rectangle selectionRectangle;
+            private Rectangle previousRectangle;
+            private Point anchorPoint;
+            private Point dragOffset;
+            private boolean draggingSelection;
+            private boolean drawingSelection;
+
+            private PdfPreviewSurface() {
+                setOpaque(false);
+                setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+
+                MouseAdapter mouseHandler = new MouseAdapter() {
+                    @Override
+                    public void mousePressed(MouseEvent event) {
+                        if (pageImage == null) {
+                            return;
+                        }
+
+                        Point boundedPoint = clampPoint(event.getPoint());
+                        previousRectangle = selectionRectangle == null ? null : new Rectangle(selectionRectangle);
+                        if (selectionRectangle != null && selectionRectangle.contains(boundedPoint)) {
+                            draggingSelection = true;
+                            dragOffset = new Point(
+                                    boundedPoint.x - selectionRectangle.x,
+                                    boundedPoint.y - selectionRectangle.y
+                            );
+                            return;
+                        }
+
+                        drawingSelection = true;
+                        anchorPoint = boundedPoint;
+                        selectionRectangle = new Rectangle(anchorPoint.x, anchorPoint.y, 1, 1);
+                        repaint();
+                    }
+
+                    @Override
+                    public void mouseDragged(MouseEvent event) {
+                        if (pageImage == null) {
+                            return;
+                        }
+
+                        Point boundedPoint = clampPoint(event.getPoint());
+                        if (drawingSelection && anchorPoint != null) {
+                            selectionRectangle = createSelectionRectangle(anchorPoint, boundedPoint);
+                            repaint();
+                            return;
+                        }
+
+                        if (draggingSelection && selectionRectangle != null && dragOffset != null) {
+                            int x = boundedPoint.x - dragOffset.x;
+                            int y = boundedPoint.y - dragOffset.y;
+                            selectionRectangle = clampRectangleToImage(
+                                    new Rectangle(x, y, selectionRectangle.width, selectionRectangle.height),
+                                    pageImage
+                            );
+                            repaint();
+                        }
+                    }
+
+                    @Override
+                    public void mouseReleased(MouseEvent event) {
+                        if (pageImage == null || selectionRectangle == null) {
+                            return;
+                        }
+
+                        if (selectionRectangle.width < MIN_SELECTION_WIDTH || selectionRectangle.height < MIN_SELECTION_HEIGHT) {
+                            selectionRectangle = previousRectangle == null ? selectionRectangle : new Rectangle(previousRectangle);
+                        }
+
+                        selectionRectangle = clampRectangleToImage(selectionRectangle, pageImage);
+                        updateCurrentPlacementFromDisplayRectangle(selectionRectangle);
+                        drawingSelection = false;
+                        draggingSelection = false;
+                        anchorPoint = null;
+                        dragOffset = null;
+                        repaint();
+                    }
+                };
+
+                addMouseListener(mouseHandler);
+                addMouseMotionListener(mouseHandler);
+            }
+
+            private void setPreview(BufferedImage pageImage, Rectangle selectionRectangle) {
+                this.pageImage = pageImage;
+                this.selectionRectangle = selectionRectangle == null ? null : new Rectangle(selectionRectangle);
+                if (pageImage == null) {
+                    setPreferredSize(new Dimension(0, 0));
+                } else {
+                    setPreferredSize(new Dimension(pageImage.getWidth(), pageImage.getHeight()));
+                }
+                revalidate();
+                repaint();
+            }
+
+            @Override
+            protected void paintComponent(Graphics graphics) {
+                super.paintComponent(graphics);
+                Graphics2D g2 = (Graphics2D) graphics.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+                if (pageImage == null) {
+                    g2.dispose();
+                    return;
+                }
+
+                g2.drawImage(pageImage, 0, 0, null);
+
+                if (selectionRectangle != null) {
+                    g2.setColor(new Color(0, 241, 254, 70));
+                    g2.fill(selectionRectangle);
+                    g2.setColor(new Color(0, 102, 108));
+                    g2.setStroke(new BasicStroke(2f));
+                    g2.draw(selectionRectangle);
+
+                    String label = "Firma";
+                    g2.setFont(new Font("Segoe UI", Font.BOLD, 12));
+                    int labelWidth = g2.getFontMetrics().stringWidth(label);
+                    int labelX = selectionRectangle.x + Math.max(8, (selectionRectangle.width - labelWidth) / 2);
+                    int labelY = selectionRectangle.y + Math.min(22, selectionRectangle.height - 8);
+                    g2.setColor(new Color(0, 65, 69));
+                    g2.drawString(label, labelX, labelY);
+                }
+                g2.dispose();
+            }
+
+            private Point clampPoint(Point point) {
+                if (pageImage == null) {
+                    return point;
+                }
+                int x = Math.max(0, Math.min(point.x, pageImage.getWidth() - 1));
+                int y = Math.max(0, Math.min(point.y, pageImage.getHeight() - 1));
+                return new Point(x, y);
+            }
+
+            private Rectangle createSelectionRectangle(Point start, Point end) {
+                int x = Math.min(start.x, end.x);
+                int y = Math.min(start.y, end.y);
+                int width = Math.abs(end.x - start.x);
+                int height = Math.abs(end.y - start.y);
+                return new Rectangle(x, y, Math.max(1, width), Math.max(1, height));
+            }
+        }
+
+        private final class PdfDocumentContext implements AutoCloseable {
+            private final Path file;
+            private final PDDocument document;
+            private final PDFRenderer renderer;
+            private final Map<String, BufferedImage> renderedPages = new LinkedHashMap<>();
+
+            private PdfDocumentContext(Path file, PDDocument document) {
+                this.file = file;
+                this.document = document;
+                this.renderer = new PDFRenderer(document);
+                this.renderer.setSubsamplingAllowed(true);
+            }
+
+            private int getPageCount() {
+                return document.getNumberOfPages();
+            }
+
+            private PDRectangle getPageBox(int pageIndex) {
+                PDPage page = document.getPage(pageIndex);
+                return page.getCropBox();
+            }
+
+            private PageRenderContext renderPage(int pageIndex, float renderScale) {
+                try {
+                    float effectiveScale = Math.max(0.5f, Math.min(renderScale, 4.5f));
+                    String cacheKey = pageIndex + "@" + Math.round(effectiveScale * 1000f);
+                    BufferedImage image = renderedPages.get(cacheKey);
+                    if (image == null) {
+                        image = renderer.renderImage(pageIndex, effectiveScale);
+                        renderedPages.put(cacheKey, image);
+                    }
+                    PDRectangle pageBox = getPageBox(pageIndex);
+                    return new PageRenderContext(file, pageIndex, image, pageBox.getWidth(), pageBox.getHeight());
+                } catch (IOException ex) {
+                    throw new IllegalStateException("Impossibile renderizzare il PDF " + file.getFileName() + ": " + ex.getMessage(), ex);
+                }
+            }
+
+            @Override
+            public void close() throws IOException {
+                document.close();
+            }
+        }
+
+        private record PageRenderContext(
+                Path file,
+                int pageIndex,
+                BufferedImage image,
+                float pageWidth,
+                float pageHeight
+        ) {
+        }
+    }
+
     private String resolveMessage(Exception ex) {
         Throwable cause = ex.getCause();
         if (cause != null && cause.getMessage() != null && !cause.getMessage().isBlank()) {
@@ -1919,7 +3255,7 @@ public final class SignatureFrame extends JFrame {
 
     private Dimension computeInitialWindowSize() {
         Rectangle bounds = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
-        int width = Math.min(650, bounds.width);
+        int width = Math.max(650, Math.min(980, bounds.width));
         int height = Math.min(Math.max((int) (bounds.height * 0.88), 820), bounds.height);
         return new Dimension(width, height);
     }
@@ -1930,6 +3266,19 @@ public final class SignatureFrame extends JFrame {
         scrollPane.setBackground(APP_BACKGROUND);
         scrollPane.getViewport().setOpaque(false);
         scrollPane.getViewport().setBackground(APP_BACKGROUND);
+        applyAppScrollBarStyle(scrollPane);
+    }
+
+    private void stylePopupScrollPane(JScrollPane scrollPane, Color viewportBackground, Border border) {
+        scrollPane.setBorder(border);
+        scrollPane.setOpaque(false);
+        scrollPane.setBackground(APP_BACKGROUND);
+        scrollPane.getViewport().setOpaque(true);
+        scrollPane.getViewport().setBackground(viewportBackground);
+        applyAppScrollBarStyle(scrollPane);
+    }
+
+    private void applyAppScrollBarStyle(JScrollPane scrollPane) {
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scrollPane.getVerticalScrollBar().setUnitIncrement(18);
         scrollPane.getVerticalScrollBar().setOpaque(false);
@@ -2001,6 +3350,13 @@ public final class SignatureFrame extends JFrame {
             button.setBackground(Color.WHITE);
             button.setForeground(TEXT_PRIMARY);
         }
+    }
+
+    private void styleToggleControl(JCheckBox checkBox) {
+        checkBox.setOpaque(false);
+        checkBox.setFocusPainted(false);
+        checkBox.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        checkBox.setForeground(TEXT_PRIMARY);
     }
 
     private void styleInfoIcon(InfoIconLabel icon) {
@@ -2219,7 +3575,7 @@ public final class SignatureFrame extends JFrame {
     private final class IdentityRenderer extends DefaultListCellRenderer {
         @Override
         public Component getListCellRendererComponent(
-                javax.swing.JList<?> list,
+                JList<?> list,
                 Object value,
                 int index,
                 boolean isSelected,
@@ -2231,6 +3587,51 @@ public final class SignatureFrame extends JFrame {
                 label.setToolTipText(identity.subject() + " | issuer: " + identity.issuer() + " | alias: " + identity.alias());
             }
             return component;
+        }
+    }
+
+    private final class SigningModeRenderer extends DefaultListCellRenderer {
+        @Override
+        public Component getListCellRendererComponent(
+                JList<?> list,
+                Object value,
+                int index,
+                boolean isSelected,
+                boolean cellHasFocus
+        ) {
+            Component component = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+            if (value instanceof SigningModeOption option && component instanceof JLabel label) {
+                label.setText(option.label());
+                label.setToolTipText(option.description());
+                label.setBorder(new EmptyBorder(8, 6, 8, 6));
+            }
+            return component;
+        }
+    }
+
+    private enum SigningModeOption {
+        ENVELOPED("Busta P7M", "Firma CMS/P7M con contenuto allegato."),
+        PDF("PDF", "Firma PAdES integrata nel documento PDF.");
+
+        private final String label;
+        private final String description;
+
+        SigningModeOption(String label, String description) {
+            this.label = label;
+            this.description = description;
+        }
+
+        private String label() {
+            return label;
+        }
+
+        private String description() {
+            return description;
+        }
+
+        @Override
+        public String toString() {
+            return label;
         }
     }
 
@@ -2356,14 +3757,20 @@ public final class SignatureFrame extends JFrame {
 
             Graphics2D g2 = (Graphics2D) graphics.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-            int trackWidth = Math.min(10, Math.max(8, trackBounds.width - 8));
-            int trackX = trackBounds.x + (trackBounds.width - trackWidth) / 2;
-            int trackY = trackBounds.y + 6;
-            int trackHeight = Math.max(0, trackBounds.height - 12);
-
             g2.setColor(new Color(214, 219, 220, 215));
-            g2.fillRoundRect(trackX, trackY, trackWidth, trackHeight, trackWidth, trackWidth);
+            if (scrollbar.getOrientation() == SwingConstants.HORIZONTAL) {
+                int trackHeight = Math.min(10, Math.max(8, trackBounds.height - 6));
+                int trackY = trackBounds.y + (trackBounds.height - trackHeight) / 2;
+                int trackX = trackBounds.x + 6;
+                int trackWidth = Math.max(0, trackBounds.width - 12);
+                g2.fillRoundRect(trackX, trackY, trackWidth, trackHeight, trackHeight, trackHeight);
+            } else {
+                int trackWidth = Math.min(10, Math.max(8, trackBounds.width - 8));
+                int trackX = trackBounds.x + (trackBounds.width - trackWidth) / 2;
+                int trackY = trackBounds.y + 6;
+                int trackHeight = Math.max(0, trackBounds.height - 12);
+                g2.fillRoundRect(trackX, trackY, trackWidth, trackHeight, trackWidth, trackWidth);
+            }
             g2.dispose();
         }
 
@@ -2376,32 +3783,57 @@ public final class SignatureFrame extends JFrame {
             Graphics2D g2 = (Graphics2D) graphics.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-            int thumbWidth = Math.min(10, Math.max(8, thumbBounds.width - 4));
-            int thumbX = thumbBounds.x + (thumbBounds.width - thumbWidth) / 2;
-            int thumbY = thumbBounds.y + 2;
-            int thumbHeight = Math.max(thumbBounds.height - 4, 18);
-            if (thumbHeight > thumbBounds.height) {
-                thumbHeight = thumbBounds.height;
-                thumbY = thumbBounds.y;
-            }
+            if (scrollbar.getOrientation() == SwingConstants.HORIZONTAL) {
+                int thumbHeight = Math.min(10, Math.max(8, thumbBounds.height - 4));
+                int thumbY = thumbBounds.y + (thumbBounds.height - thumbHeight) / 2;
+                int thumbX = thumbBounds.x + 2;
+                int thumbWidth = Math.max(thumbBounds.width - 4, 28);
+                if (thumbWidth > thumbBounds.width) {
+                    thumbWidth = thumbBounds.width;
+                    thumbX = thumbBounds.x;
+                }
 
-            g2.setPaint(new GradientPaint(
-                    thumbX,
-                    thumbY,
-                    new Color(0, 128, 136),
-                    thumbX,
-                    thumbY + thumbHeight,
-                    new Color(0, 86, 92)
-            ));
-            g2.fillRoundRect(thumbX, thumbY, thumbWidth, thumbHeight, thumbWidth, thumbWidth);
-            g2.setColor(new Color(255, 255, 255, 120));
-            g2.drawRoundRect(thumbX, thumbY, thumbWidth - 1, thumbHeight - 1, thumbWidth, thumbWidth);
+                g2.setPaint(new GradientPaint(
+                        thumbX,
+                        thumbY,
+                        new Color(0, 128, 136),
+                        thumbX + thumbWidth,
+                        thumbY,
+                        new Color(0, 86, 92)
+                ));
+                g2.fillRoundRect(thumbX, thumbY, thumbWidth, thumbHeight, thumbHeight, thumbHeight);
+                g2.setColor(new Color(255, 255, 255, 120));
+                g2.drawRoundRect(thumbX, thumbY, thumbWidth - 1, thumbHeight - 1, thumbHeight, thumbHeight);
+            } else {
+                int thumbWidth = Math.min(10, Math.max(8, thumbBounds.width - 4));
+                int thumbX = thumbBounds.x + (thumbBounds.width - thumbWidth) / 2;
+                int thumbY = thumbBounds.y + 2;
+                int thumbHeight = Math.max(thumbBounds.height - 4, 18);
+                if (thumbHeight > thumbBounds.height) {
+                    thumbHeight = thumbBounds.height;
+                    thumbY = thumbBounds.y;
+                }
+
+                g2.setPaint(new GradientPaint(
+                        thumbX,
+                        thumbY,
+                        new Color(0, 128, 136),
+                        thumbX,
+                        thumbY + thumbHeight,
+                        new Color(0, 86, 92)
+                ));
+                g2.fillRoundRect(thumbX, thumbY, thumbWidth, thumbHeight, thumbWidth, thumbWidth);
+                g2.setColor(new Color(255, 255, 255, 120));
+                g2.drawRoundRect(thumbX, thumbY, thumbWidth - 1, thumbHeight - 1, thumbWidth, thumbWidth);
+            }
             g2.dispose();
         }
 
         @Override
         protected Dimension getMinimumThumbSize() {
-            return new Dimension(10, 54);
+            return scrollbar != null && scrollbar.getOrientation() == SwingConstants.HORIZONTAL
+                    ? new Dimension(54, 10)
+                    : new Dimension(10, 54);
         }
 
         private JButton createZeroButton() {

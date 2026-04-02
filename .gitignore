@@ -19,3 +19,4 @@ testdata/*
 .vscode/
 *.log
 gcm-login.*
+trash/

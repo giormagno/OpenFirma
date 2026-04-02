@@ -30,6 +30,10 @@ $dependencies = @(
     @{
         File = "svg-salamander-1.1.5.5.jar"
         Url = "https://repo1.maven.org/maven2/io/github/blackears/svg-salamander/1.1.5.5/svg-salamander-1.1.5.5.jar"
+    },
+    @{
+        File = "pdfbox-app-3.0.3.jar"
+        Url = "https://repo1.maven.org/maven2/org/apache/pdfbox/pdfbox-app/3.0.3/pdfbox-app-3.0.3.jar"
     }
 )
 
