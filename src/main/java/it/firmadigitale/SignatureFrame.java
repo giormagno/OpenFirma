@@ -930,9 +930,8 @@ public final class SignatureFrame extends JFrame {
                                 selectedIdentity.alias(),
                                 file,
                                 outputTargets.get(file),
-                                pdfPlan == null ? null : pdfPlan.placement(),
-                                selectedIdentity.displayName(),
-                                pdfPlan != null && pdfPlan.applyToEveryPage()
+                                pdfPlan == null ? null : pdfPlan.placements(),
+                                selectedIdentity.displayName()
                         );
                     } else {
                         result = signatureService.signFile(
@@ -1647,7 +1646,13 @@ public final class SignatureFrame extends JFrame {
         renameLabel.setForeground(TEXT_MUTED);
         renamePanel.add(renameLabel, BorderLayout.NORTH);
 
-        JTextField renameField = new JTextField(currentOutput.getFileName().toString());
+        JTextField renameField = new JTextField(suggestRenameOutputFileName(
+                inputFile,
+                currentOutput,
+                outputDirectory,
+                outputTargets,
+                signingMode
+        ));
         styleInput(renameField);
         styleOutputField(renameField);
         renameField.setColumns(36);
@@ -1716,6 +1721,31 @@ public final class SignatureFrame extends JFrame {
         SwingUtilities.invokeLater(renameField::requestFocusInWindow);
         dialog.setVisible(true);
         return selectedOutput[0];
+    }
+
+    private String suggestRenameOutputFileName(
+            Path inputFile,
+            Path currentOutput,
+            Path outputDirectory,
+            Map<Path, Path> outputTargets,
+            SigningModeOption signingMode
+    ) {
+        if (signingMode != SigningModeOption.PDF) {
+            return currentOutput.getFileName().toString();
+        }
+
+        Path normalizedInput = inputFile.toAbsolutePath().normalize();
+        Path normalizedOutput = currentOutput.toAbsolutePath().normalize();
+        if (!normalizedInput.equals(normalizedOutput)) {
+            return currentOutput.getFileName().toString();
+        }
+
+        String candidateName = stripTrailingExtension(currentOutput.getFileName().toString()) + "_firmato.pdf";
+        Path candidateOutput = outputDirectory.resolve(candidateName);
+        if (Files.exists(candidateOutput) || isDuplicatePlannedOutput(inputFile, candidateOutput, outputTargets)) {
+            return currentOutput.getFileName().toString();
+        }
+        return candidateName;
     }
 
     private JPanel createDialogDetailRow(String labelText, String value) {
@@ -1828,12 +1858,7 @@ public final class SignatureFrame extends JFrame {
     private String resolveSignedOutputFileName(Path inputFile, Path outputDirectory, SigningModeOption signingMode) {
         String fileName = inputFile.getFileName().toString();
         if (signingMode == SigningModeOption.PDF) {
-            String normalizedPdfName = fileName.toLowerCase(Locale.ROOT).endsWith(".pdf") ? fileName : fileName + ".pdf";
-            Path targetPath = outputDirectory.resolve(normalizedPdfName).toAbsolutePath().normalize();
-            if (targetPath.equals(inputFile.toAbsolutePath().normalize())) {
-                return stripTrailingExtension(normalizedPdfName) + "_firmato.pdf";
-            }
-            return normalizedPdfName;
+            return fileName.toLowerCase(Locale.ROOT).endsWith(".pdf") ? fileName : fileName + ".pdf";
         }
         return fileName + ".p7m";
     }
@@ -2306,8 +2331,7 @@ public final class SignatureFrame extends JFrame {
     }
 
     private record PdfSigningPlan(
-            SignatureService.PdfVisibleSignaturePlacement placement,
-            boolean applyToEveryPage
+            List<SignatureService.PdfVisibleSignaturePlacement> placements
     ) {
     }
 
@@ -2578,19 +2602,22 @@ public final class SignatureFrame extends JFrame {
         private final JButton zoomOutButton = new JButton("-");
         private final JButton zoomInButton = new JButton("+");
         private final JButton fitWidthButton = new JButton("Adatta larghezza");
+        private final JButton signAllPagesButton = new JButton("Firma tutte");
+        private final JButton clearCurrentPageButton = new JButton("Rimuovi ultima firma");
         private final JButton resetPlacementButton = new JButton("Ripristina posizione");
         private final JButton cancelButton = new JButton("Annulla");
         private final JButton startButton = new JButton("Avvia firma");
-        private final JCheckBox signEveryPageCheckBox = new JCheckBox("Firma su ogni pagina");
         private final JLabel currentPageLabel = new JLabel();
+        private final JLabel signedPagesLabel = new JLabel("Firme: 0");
         private final JLabel zoomValueLabel = new JLabel("100%");
         private final PdfPreviewSurface previewSurface = new PdfPreviewSurface();
         private final JPanel previewWrapper = new JPanel(new GridBagLayout());
         private final JScrollPane previewScrollPane = new JScrollPane(previewWrapper);
         private final Map<Path, PdfDocumentContext> documentContexts = new LinkedHashMap<>();
-        private final Map<Path, SignatureService.PdfVisibleSignaturePlacement> placements = new LinkedHashMap<>();
+        private final Map<Path, Integer> currentPageIndexes = new LinkedHashMap<>();
+        private final Map<Path, Map<Integer, SignatureService.PdfVisibleSignaturePlacement>> previewPlacements = new LinkedHashMap<>();
+        private final Map<Path, Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>>> confirmedPlacements = new LinkedHashMap<>();
         private final Map<Path, Float> zoomFactors = new LinkedHashMap<>();
-        private final Map<Path, Boolean> signEveryPageFlags = new LinkedHashMap<>();
         private PageRenderContext currentRenderContext;
         private Path currentFile;
         private boolean syncingState;
@@ -2618,10 +2645,11 @@ public final class SignatureFrame extends JFrame {
             styleButton(zoomOutButton, false);
             styleButton(zoomInButton, false);
             styleButton(fitWidthButton, false);
+            styleButton(signAllPagesButton, false);
+            styleButton(clearCurrentPageButton, false);
             styleButton(resetPlacementButton, false);
             styleButton(cancelButton, false);
             styleButton(startButton, true);
-            styleToggleControl(signEveryPageCheckBox);
 
             zoomOutButton.setPreferredSize(new Dimension(46, zoomOutButton.getPreferredSize().height));
             zoomInButton.setPreferredSize(new Dimension(46, zoomInButton.getPreferredSize().height));
@@ -2629,6 +2657,7 @@ public final class SignatureFrame extends JFrame {
             currentPageLabel.setForeground(TEXT_PRIMARY);
             zoomValueLabel.setHorizontalAlignment(SwingConstants.CENTER);
             styleBadge(zoomValueLabel, new Color(241, 244, 246), TEXT_MUTED);
+            styleBadge(signedPagesLabel, new Color(241, 244, 246), TEXT_MUTED);
 
             documentTabs.setFont(new Font("Segoe UI", Font.BOLD, 12));
             documentTabs.setBackground(HEADER_SURFACE);
@@ -2642,14 +2671,11 @@ public final class SignatureFrame extends JFrame {
             zoomOutButton.addActionListener(event -> adjustZoom(false));
             zoomInButton.addActionListener(event -> adjustZoom(true));
             fitWidthButton.addActionListener(event -> resetZoomToFitWidth());
+            signAllPagesButton.addActionListener(event -> confirmPlacementOnEveryPage());
+            clearCurrentPageButton.addActionListener(event -> clearConfirmedPlacementOnCurrentPage());
             resetPlacementButton.addActionListener(event -> resetPlacement());
             cancelButton.addActionListener(event -> dialog.dispose());
             startButton.addActionListener(event -> confirmAndStartSigning());
-            signEveryPageCheckBox.addActionListener(event -> {
-                if (!syncingState && currentFile != null) {
-                    signEveryPageFlags.put(currentFile, signEveryPageCheckBox.isSelected());
-                }
-            });
             documentTabs.addChangeListener(event -> {
                 if (syncingState) {
                     return;
@@ -2697,7 +2723,7 @@ public final class SignatureFrame extends JFrame {
             headerPanel.setOpaque(false);
             headerPanel.add(createSectionTitle("Firma PDF"), BorderLayout.NORTH);
             headerPanel.add(
-                    createSectionSubtitle("Posiziona la firma visibile sui documenti PDF prima di avviare il motore PAdES."),
+                    createSectionSubtitle("Apparizioni visibili della firma sui documenti PDF."),
                     BorderLayout.SOUTH
             );
 
@@ -2719,7 +2745,9 @@ public final class SignatureFrame extends JFrame {
 
             JPanel rightToolbar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
             rightToolbar.setOpaque(false);
-            rightToolbar.add(signEveryPageCheckBox);
+            rightToolbar.add(signedPagesLabel);
+            rightToolbar.add(signAllPagesButton);
+            rightToolbar.add(clearCurrentPageButton);
             rightToolbar.add(resetPlacementButton);
 
             JPanel toolbarPanel = new JPanel(new BorderLayout(12, 0));
@@ -2775,9 +2803,12 @@ public final class SignatureFrame extends JFrame {
                 for (Path file : files) {
                     PdfDocumentContext context = new PdfDocumentContext(file, Loader.loadPDF(file.toFile()));
                     documentContexts.put(file, context);
-                    placements.put(file, createDefaultPlacement(context, 0));
+                    currentPageIndexes.put(file, 0);
+                    Map<Integer, SignatureService.PdfVisibleSignaturePlacement> previewByPage = new LinkedHashMap<>();
+                    previewByPage.put(0, createDefaultPlacement(context, 0));
+                    previewPlacements.put(file, previewByPage);
+                    confirmedPlacements.put(file, new LinkedHashMap<>());
                     zoomFactors.put(file, 1f);
-                    signEveryPageFlags.put(file, Boolean.FALSE);
                     documentTabs.addTab(file.getFileName().toString(), createTabPlaceholder());
                     documentTabs.setToolTipTextAt(documentTabs.getTabCount() - 1, file.toAbsolutePath().toString());
                 }
@@ -2813,9 +2844,6 @@ public final class SignatureFrame extends JFrame {
             }
 
             currentFile = file;
-            syncingState = true;
-            signEveryPageCheckBox.setSelected(Boolean.TRUE.equals(signEveryPageFlags.getOrDefault(file, Boolean.FALSE)));
-            syncingState = false;
             refreshCurrentPreview();
         }
 
@@ -2825,13 +2853,14 @@ public final class SignatureFrame extends JFrame {
             }
 
             PdfDocumentContext context = documentContexts.get(currentFile);
-            SignatureService.PdfVisibleSignaturePlacement currentPlacement = placements.get(currentFile);
-            int nextPageIndex = Math.max(0, Math.min(context.getPageCount() - 1, currentPlacement.pageIndex() + delta));
-            if (nextPageIndex == currentPlacement.pageIndex()) {
+            int currentPageIndex = currentPageIndexes.getOrDefault(currentFile, 0);
+            int nextPageIndex = Math.max(0, Math.min(context.getPageCount() - 1, currentPageIndex + delta));
+            if (nextPageIndex == currentPageIndex) {
                 return;
             }
 
-            placements.put(currentFile, remapPlacement(context, currentPlacement, nextPageIndex));
+            currentPageIndexes.put(currentFile, nextPageIndex);
+            ensurePreviewPlacement(context, currentFile, nextPageIndex);
             refreshCurrentPreview();
         }
 
@@ -2867,8 +2896,8 @@ public final class SignatureFrame extends JFrame {
             }
 
             PdfDocumentContext context = documentContexts.get(currentFile);
-            SignatureService.PdfVisibleSignaturePlacement currentPlacement = placements.get(currentFile);
-            placements.put(currentFile, createDefaultPlacement(context, currentPlacement.pageIndex()));
+            int pageIndex = currentPageIndexes.getOrDefault(currentFile, 0);
+            previewPlacements.get(currentFile).put(pageIndex, createDefaultPlacement(context, pageIndex));
             refreshCurrentPreview();
         }
 
@@ -2905,34 +2934,122 @@ public final class SignatureFrame extends JFrame {
             return new SignatureService.PdfVisibleSignaturePlacement(targetPageIndex, x, y, width, height);
         }
 
+        private SignatureService.PdfVisibleSignaturePlacement ensurePreviewPlacement(
+                PdfDocumentContext context,
+                Path file,
+                int pageIndex
+        ) {
+            Map<Integer, SignatureService.PdfVisibleSignaturePlacement> previewByPage = previewPlacements.get(file);
+            SignatureService.PdfVisibleSignaturePlacement previewPlacement = previewByPage.get(pageIndex);
+            if (previewPlacement != null) {
+                return previewPlacement;
+            }
+
+            List<SignatureService.PdfVisibleSignaturePlacement> confirmedOnPage = confirmedPlacements.get(file).get(pageIndex);
+            if (confirmedOnPage != null && !confirmedOnPage.isEmpty()) {
+                SignatureService.PdfVisibleSignaturePlacement lastConfirmedPlacement = confirmedOnPage.get(confirmedOnPage.size() - 1);
+                previewByPage.put(pageIndex, lastConfirmedPlacement);
+                return lastConfirmedPlacement;
+            }
+
+            SignatureService.PdfVisibleSignaturePlacement anchorPlacement = findAnchorPlacement(file, pageIndex);
+            previewPlacement = anchorPlacement == null
+                    ? createDefaultPlacement(context, pageIndex)
+                    : remapPlacement(context, anchorPlacement, pageIndex);
+            previewByPage.put(pageIndex, previewPlacement);
+            return previewPlacement;
+        }
+
+        private SignatureService.PdfVisibleSignaturePlacement findAnchorPlacement(Path file, int pageIndex) {
+            SignatureService.PdfVisibleSignaturePlacement bestPlacement = null;
+            int bestDistance = Integer.MAX_VALUE;
+
+            for (List<SignatureService.PdfVisibleSignaturePlacement> placements : confirmedPlacements.get(file).values()) {
+                for (SignatureService.PdfVisibleSignaturePlacement placement : placements) {
+                    int distance = Math.abs(placement.pageIndex() - pageIndex);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestPlacement = placement;
+                    }
+                }
+            }
+            for (SignatureService.PdfVisibleSignaturePlacement placement : previewPlacements.get(file).values()) {
+                int distance = Math.abs(placement.pageIndex() - pageIndex);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestPlacement = placement;
+                }
+            }
+            return bestPlacement;
+        }
+
         private void refreshCurrentPreview() {
             if (currentFile == null) {
                 return;
             }
 
             PdfDocumentContext context = documentContexts.get(currentFile);
-            SignatureService.PdfVisibleSignaturePlacement placement = placements.get(currentFile);
-            if (placement == null) {
-                placement = createDefaultPlacement(context, 0);
-                placements.put(currentFile, placement);
+            int currentPageIndex = currentPageIndexes.getOrDefault(currentFile, 0);
+            currentRenderContext = context.renderPage(currentPageIndex, resolvePreviewRenderScale(context, currentPageIndex));
+            SignatureService.PdfVisibleSignaturePlacement previewPlacement = ensurePreviewPlacement(context, currentFile, currentPageIndex);
+            List<SignatureService.PdfVisibleSignaturePlacement> confirmedPlacementsOnPage =
+                    confirmedPlacements.get(currentFile).getOrDefault(currentPageIndex, List.of());
+            List<Rectangle> confirmedRectangles = new ArrayList<>();
+            for (SignatureService.PdfVisibleSignaturePlacement placement : confirmedPlacementsOnPage) {
+                confirmedRectangles.add(convertPlacementToDisplayRectangle(placement, currentRenderContext));
             }
-
-            currentRenderContext = context.renderPage(placement.pageIndex(), resolvePreviewRenderScale(context, placement.pageIndex()));
             previewSurface.setPreview(
                     currentRenderContext.image(),
-                    convertPlacementToDisplayRectangle(placement, currentRenderContext)
+                    confirmedRectangles,
+                    convertPlacementToDisplayRectangle(previewPlacement, currentRenderContext)
             );
             previewSurface.revalidate();
 
-            currentPageLabel.setText("Pagina " + (placement.pageIndex() + 1) + " / " + context.getPageCount());
-            previousPageButton.setEnabled(placement.pageIndex() > 0);
-            nextPageButton.setEnabled(placement.pageIndex() < context.getPageCount() - 1);
+            currentPageLabel.setText("Pagina " + (currentPageIndex + 1) + " / " + context.getPageCount());
+            previousPageButton.setEnabled(currentPageIndex > 0);
+            nextPageButton.setEnabled(currentPageIndex < context.getPageCount() - 1);
+            clearCurrentPageButton.setEnabled(!confirmedPlacementsOnPage.isEmpty());
+            signAllPagesButton.setEnabled(context.getPageCount() > 1);
+            updateSignedPagesBadge();
 
             float zoomFactor = zoomFactors.getOrDefault(currentFile, 1f);
             zoomValueLabel.setText(Math.round(zoomFactor * 100f) + "%");
             zoomOutButton.setEnabled(zoomFactor > PDF_ZOOM_FACTOR_MIN + 0.01f);
             zoomInButton.setEnabled(zoomFactor < PDF_ZOOM_FACTOR_MAX - 0.01f);
             fitWidthButton.setEnabled(Math.abs(zoomFactor - 1f) > 0.01f);
+        }
+
+        private void updateSignedPagesBadge() {
+            if (currentFile == null) {
+                applySignedPagesBadge("Firme: 0", new Color(241, 244, 246), TEXT_MUTED);
+                return;
+            }
+
+            int confirmedCount = countConfirmedPlacements(currentFile);
+            if (confirmedCount == 0) {
+                applySignedPagesBadge("Firme: 0", new Color(241, 244, 246), TEXT_MUTED);
+            } else {
+                applySignedPagesBadge("Firme: " + confirmedCount, ACCENT_SOFT, ACCENT);
+            }
+        }
+
+        private int countConfirmedPlacements(Path file) {
+            Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> placementsByPage = confirmedPlacements.get(file);
+            if (placementsByPage == null || placementsByPage.isEmpty()) {
+                return 0;
+            }
+
+            int total = 0;
+            for (List<SignatureService.PdfVisibleSignaturePlacement> placements : placementsByPage.values()) {
+                total += placements.size();
+            }
+            return total;
+        }
+
+        private void applySignedPagesBadge(String text, Color background, Color foreground) {
+            signedPagesLabel.setText(text);
+            signedPagesLabel.setHorizontalAlignment(SwingConstants.CENTER);
+            styleBadge(signedPagesLabel, background, foreground);
         }
 
         private float resolvePreviewRenderScale(PdfDocumentContext context, int pageIndex) {
@@ -2976,14 +3093,86 @@ public final class SignatureFrame extends JFrame {
             float y = (float) (boundedRectangle.y * scaleY);
             float width = (float) Math.max(1d, boundedRectangle.width * scaleX);
             float height = (float) Math.max(1d, boundedRectangle.height * scaleY);
+            int pageIndex = currentPageIndexes.getOrDefault(currentFile, currentRenderContext.pageIndex());
 
-            placements.put(currentFile, new SignatureService.PdfVisibleSignaturePlacement(
-                    placements.get(currentFile).pageIndex(),
+            previewPlacements.get(currentFile).put(pageIndex, new SignatureService.PdfVisibleSignaturePlacement(
+                    pageIndex,
                     x,
                     y,
                     width,
                     height
             ));
+        }
+
+        private void confirmPlacementOnCurrentPage(Point clickPoint) {
+            if (currentFile == null || currentRenderContext == null || currentRenderContext.image() == null) {
+                return;
+            }
+
+            int pageIndex = currentPageIndexes.getOrDefault(currentFile, currentRenderContext.pageIndex());
+            SignatureService.PdfVisibleSignaturePlacement previewPlacement = previewPlacements.get(currentFile).get(pageIndex);
+            if (previewPlacement == null) {
+                previewPlacement = ensurePreviewPlacement(documentContexts.get(currentFile), currentFile, pageIndex);
+            }
+
+            Rectangle displayRectangle = convertPlacementToDisplayRectangle(previewPlacement, currentRenderContext);
+            Rectangle centeredRectangle = clampRectangleToImage(
+                    new Rectangle(
+                            clickPoint.x - (displayRectangle.width / 2),
+                            clickPoint.y - (displayRectangle.height / 2),
+                            displayRectangle.width,
+                            displayRectangle.height
+                    ),
+                    currentRenderContext.image()
+            );
+            updateCurrentPlacementFromDisplayRectangle(centeredRectangle);
+            SignatureService.PdfVisibleSignaturePlacement confirmedPlacement = previewPlacements.get(currentFile).get(pageIndex);
+            confirmedPlacements.get(currentFile)
+                    .computeIfAbsent(pageIndex, ignored -> new ArrayList<>())
+                    .add(confirmedPlacement);
+            refreshCurrentPreview();
+        }
+
+        private void clearConfirmedPlacementOnCurrentPage() {
+            if (currentFile == null) {
+                return;
+            }
+
+            int pageIndex = currentPageIndexes.getOrDefault(currentFile, 0);
+            List<SignatureService.PdfVisibleSignaturePlacement> confirmedOnPage = confirmedPlacements.get(currentFile).get(pageIndex);
+            if (confirmedOnPage == null || confirmedOnPage.isEmpty()) {
+                return;
+            }
+
+            SignatureService.PdfVisibleSignaturePlacement removedPlacement =
+                    confirmedOnPage.remove(confirmedOnPage.size() - 1);
+            previewPlacements.get(currentFile).put(pageIndex, removedPlacement);
+            if (confirmedOnPage.isEmpty()) {
+                confirmedPlacements.get(currentFile).remove(pageIndex);
+            }
+            refreshCurrentPreview();
+        }
+
+        private void confirmPlacementOnEveryPage() {
+            if (currentFile == null) {
+                return;
+            }
+
+            PdfDocumentContext context = documentContexts.get(currentFile);
+            int anchorPageIndex = currentPageIndexes.getOrDefault(currentFile, 0);
+            SignatureService.PdfVisibleSignaturePlacement anchorPlacement = ensurePreviewPlacement(context, currentFile, anchorPageIndex);
+            Map<Integer, SignatureService.PdfVisibleSignaturePlacement> previewByPage = previewPlacements.get(currentFile);
+            Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> confirmedByPage = confirmedPlacements.get(currentFile);
+
+            confirmedByPage.clear();
+            for (int pageIndex = 0; pageIndex < context.getPageCount(); pageIndex++) {
+                SignatureService.PdfVisibleSignaturePlacement pagePlacement = pageIndex == anchorPageIndex
+                        ? anchorPlacement
+                        : remapPlacement(context, anchorPlacement, pageIndex);
+                previewByPage.put(pageIndex, pagePlacement);
+                confirmedByPage.put(pageIndex, new ArrayList<>(List.of(pagePlacement)));
+            }
+            refreshCurrentPreview();
         }
 
         private Rectangle clampRectangleToImage(Rectangle rectangle, BufferedImage image) {
@@ -3010,15 +3199,22 @@ public final class SignatureFrame extends JFrame {
 
             Map<Path, PdfSigningPlan> pdfPlans = new LinkedHashMap<>();
             for (Path file : files) {
-                SignatureService.PdfVisibleSignaturePlacement placement = placements.get(file);
-                if (placement == null) {
-                    showError("Definisci la posizione della firma per tutti i PDF prima di procedere.");
+                Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> confirmedByPage = confirmedPlacements.get(file);
+                if (confirmedByPage == null || confirmedByPage.isEmpty()) {
+                    showError("Conferma almeno una pagina firmata per ogni PDF prima di procedere.");
                     return;
                 }
-                pdfPlans.put(file, new PdfSigningPlan(
-                        placement,
-                        Boolean.TRUE.equals(signEveryPageFlags.getOrDefault(file, Boolean.FALSE))
-                ));
+
+                List<SignatureService.PdfVisibleSignaturePlacement> placements = new ArrayList<>();
+                List<Integer> pageIndexes = new ArrayList<>(confirmedByPage.keySet());
+                Collections.sort(pageIndexes);
+                for (Integer pageIndex : pageIndexes) {
+                    List<SignatureService.PdfVisibleSignaturePlacement> placementsOnPage = confirmedByPage.get(pageIndex);
+                    if (placementsOnPage != null && !placementsOnPage.isEmpty()) {
+                        placements.addAll(placementsOnPage);
+                    }
+                }
+                pdfPlans.put(file, new PdfSigningPlan(List.copyOf(placements)));
             }
 
             dialog.dispose();
@@ -3037,6 +3233,7 @@ public final class SignatureFrame extends JFrame {
             private static final int MIN_SELECTION_HEIGHT = 20;
 
             private BufferedImage pageImage;
+            private List<Rectangle> confirmedRectangles = List.of();
             private Rectangle selectionRectangle;
             private Rectangle previousRectangle;
             private Point anchorPoint;
@@ -3051,7 +3248,7 @@ public final class SignatureFrame extends JFrame {
                 MouseAdapter mouseHandler = new MouseAdapter() {
                     @Override
                     public void mousePressed(MouseEvent event) {
-                        if (pageImage == null) {
+                        if (pageImage == null || event.getClickCount() >= 2) {
                             return;
                         }
 
@@ -3114,14 +3311,27 @@ public final class SignatureFrame extends JFrame {
                         dragOffset = null;
                         repaint();
                     }
+
+                    @Override
+                    public void mouseClicked(MouseEvent event) {
+                        if (pageImage == null || event.getClickCount() < 2) {
+                            return;
+                        }
+                        confirmPlacementOnCurrentPage(clampPoint(event.getPoint()));
+                    }
                 };
 
                 addMouseListener(mouseHandler);
                 addMouseMotionListener(mouseHandler);
             }
 
-            private void setPreview(BufferedImage pageImage, Rectangle selectionRectangle) {
+            private void setPreview(
+                    BufferedImage pageImage,
+                    List<Rectangle> confirmedRectangles,
+                    Rectangle selectionRectangle
+            ) {
                 this.pageImage = pageImage;
+                this.confirmedRectangles = confirmedRectangles == null ? List.of() : List.copyOf(confirmedRectangles);
                 this.selectionRectangle = selectionRectangle == null ? null : new Rectangle(selectionRectangle);
                 if (pageImage == null) {
                     setPreferredSize(new Dimension(0, 0));
@@ -3145,22 +3355,35 @@ public final class SignatureFrame extends JFrame {
 
                 g2.drawImage(pageImage, 0, 0, null);
 
-                if (selectionRectangle != null) {
-                    g2.setColor(new Color(0, 241, 254, 70));
-                    g2.fill(selectionRectangle);
-                    g2.setColor(new Color(0, 102, 108));
-                    g2.setStroke(new BasicStroke(2f));
-                    g2.draw(selectionRectangle);
+                for (Rectangle confirmedRectangle : confirmedRectangles) {
+                    paintPlacementRectangle(g2, confirmedRectangle, "Firma", new Color(0, 102, 108, 66), new Color(0, 86, 92));
+                }
 
-                    String label = "Firma";
-                    g2.setFont(new Font("Segoe UI", Font.BOLD, 12));
-                    int labelWidth = g2.getFontMetrics().stringWidth(label);
-                    int labelX = selectionRectangle.x + Math.max(8, (selectionRectangle.width - labelWidth) / 2);
-                    int labelY = selectionRectangle.y + Math.min(22, selectionRectangle.height - 8);
-                    g2.setColor(new Color(0, 65, 69));
-                    g2.drawString(label, labelX, labelY);
+                if (selectionRectangle != null) {
+                    paintPlacementRectangle(g2, selectionRectangle, "Nuova", new Color(0, 241, 254, 70), new Color(0, 102, 108));
                 }
                 g2.dispose();
+            }
+
+            private void paintPlacementRectangle(
+                    Graphics2D graphics,
+                    Rectangle rectangle,
+                    String label,
+                    Color fillColor,
+                    Color strokeColor
+            ) {
+                graphics.setColor(fillColor);
+                graphics.fill(rectangle);
+                graphics.setColor(strokeColor);
+                graphics.setStroke(new BasicStroke(2f));
+                graphics.draw(rectangle);
+
+                graphics.setFont(new Font("Segoe UI", Font.BOLD, 12));
+                int labelWidth = graphics.getFontMetrics().stringWidth(label);
+                int labelX = Math.max(8, Math.min(rectangle.x + 8, getWidth() - labelWidth - 8));
+                int labelY = rectangle.y + Math.min(22, rectangle.height - 8);
+                graphics.setColor(new Color(0, 65, 69));
+                graphics.drawString(label, labelX, labelY);
             }
 
             private Point clampPoint(Point point) {

@@ -182,6 +182,22 @@ Output atteso:
 release\OpenFirma\OpenFirma.exe
 ```
 
+## Versione portable in file singolo
+
+Genera un eseguibile autoestraente nella cartella principale:
+
+```powershell
+.\portable.ps1 -Clean
+```
+
+Output atteso:
+
+```text
+OpenFirma-Portable.exe
+```
+
+Questo file contiene la distribuzione `release\OpenFirma` con runtime Java e dipendenze. All'avvio estrae i file in una cache temporanea dell'utente e avvia OpenFirma senza installazione.
+
 ## Uso CLI tecnico
 
 La CLI resta utile per test e automazione del backend.

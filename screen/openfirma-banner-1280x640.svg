@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">OpenFirma Banner</title>
+  <desc id="desc">Banner 1280x640 con logo OpenFirma e nome applicazione.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F6F8F9"/>
+      <stop offset="100%" stop-color="#EAF4F7"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#B2F0FB" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#B2F0FB" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0B1B44" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="980" cy="148" r="220" fill="url(#glow)"/>
+  <circle cx="232" cy="540" r="180" fill="url(#glow)" opacity="0.45"/>
+
+  <g filter="url(#softShadow)">
+    <rect x="80" y="80" width="1120" height="480" rx="34" fill="#FFFFFF" fill-opacity="0.94"/>
+  </g>
+
+  <g transform="translate(126 124)">
+    <g transform="translate(0 22) scale(0.56)">
+      <g>
+        <path fill="none" stroke="#020288" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M212.152,191.449c13.502-45.387-4.014-77.222-28.855-86.78C73.578,62.452,55.399,334.543,170.291,320.389c22.615-2.786,31.292-13.404,35.381-35.936"/>
+        <path fill="none" stroke="#020288" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" d="M150.255,243.862c21.964-0.777,43.926-1.557,65.89-2.334c9.443-0.334,19.42-0.549,27.693,4.016c11.727,6.469,16.844,21.219,15.769,34.568c-1.076,13.348-7.162,25.707-13.139,37.69c29.895-6.44,55.101-31.042,62.263-60.773c-4.291,12.828,6.899,27.946,20.419,28.401s25.51-12.849,24.522-26.34c15.489,14.244,30.978,28.488,46.469,42.732c3.168-10.544,8.524-23.014,19.471-24.199c7.322-0.792,13.872,4.054,20.289,7.669c18.746,10.559,42.608,11.464,62.1,2.355"/>
+        <path fill="#B2F0FB" d="M30.081,421.786C13.494,421.786,0,408.291,0,391.704c0-16.587,13.494-30.081,30.081-30.081h451.837c16.587,0,30.082,13.494,30.082,30.081c0,16.587-13.495,30.082-30.082,30.082H30.081z"/>
+        <line fill="none" stroke="#020288" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="31.086" y1="303.159" x2="59.485" y2="331.559"/>
+        <line fill="none" stroke="#020288" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" x1="31.086" y1="331.559" x2="59.485" y2="303.159"/>
+      </g>
+    </g>
+
+    <g transform="translate(372 118)">
+      <text x="0" y="102" fill="#020288" font-family="Arial" font-size="108" font-weight="700" letter-spacing="-2">OpenFirma</text>
+      <rect x="4" y="136" width="474" height="14" rx="7" fill="#B2F0FB"/>
+    </g>
+  </g>
+</svg>

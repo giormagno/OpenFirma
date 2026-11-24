@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
 import java.util.Calendar;
@@ -160,14 +161,25 @@ public final class SignatureService {
         }
 
         LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
-        return signSingleFile(
-                signingMaterial.privateKey(),
-                signingMaterial.signatureProviderName(),
-                signingMaterial.signerCertificate(),
-                signingMaterial.certificateChain(),
-                inputFile,
-                outputFile
-        );
+        boolean replaceExistingOutput = Files.exists(outputFile);
+        Path writeTarget = replaceExistingOutput ? createSiblingTempFile(outputFile) : outputFile;
+        try {
+            Path signedOutput = signSingleFile(
+                    signingMaterial.privateKey(),
+                    signingMaterial.signatureProviderName(),
+                    signingMaterial.signerCertificate(),
+                    signingMaterial.certificateChain(),
+                    inputFile,
+                    writeTarget
+            );
+            if (replaceExistingOutput) {
+                replaceFile(writeTarget, outputFile);
+            }
+            return replaceExistingOutput ? outputFile : signedOutput;
+        } catch (Exception ex) {
+            deleteTempFileQuietly(writeTarget, outputFile);
+            throw ex;
+        }
     }
 
     public Path signPdfFile(
@@ -179,14 +191,31 @@ public final class SignatureService {
             String signerDisplayName,
             boolean applyToEveryPage
     ) throws Exception {
+        List<PdfVisibleSignaturePlacement> placements;
+        if (applyToEveryPage) {
+            placements = expandPlacementToEveryPage(inputFile, placement);
+        } else {
+            placements = List.of(placement);
+        }
+        return signPdfFile(config, alias, inputFile, outputFile, placements, signerDisplayName);
+    }
+
+    public Path signPdfFile(
+            SignatureConfig config,
+            String alias,
+            Path inputFile,
+            Path outputFile,
+            List<PdfVisibleSignaturePlacement> placements,
+            String signerDisplayName
+    ) throws Exception {
         if (inputFile == null || !Files.exists(inputFile)) {
             throw new IllegalArgumentException("File PDF non trovato: " + inputFile);
         }
         if (outputFile == null) {
             throw new IllegalArgumentException("Il file PDF di output non e valido.");
         }
-        if (placement == null) {
-            throw new IllegalArgumentException("La posizione della firma PDF non e stata definita.");
+        if (placements == null || placements.isEmpty()) {
+            throw new IllegalArgumentException("Definire almeno una posizione visibile per la firma PDF.");
         }
 
         Path parent = outputFile.toAbsolutePath().getParent();
@@ -196,15 +225,17 @@ public final class SignatureService {
 
         LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
         SignatureOptions signatureOptions = null;
+        boolean replaceExistingOutput = Files.exists(outputFile);
+        boolean sameInputAndOutput = inputFile.toAbsolutePath().normalize().equals(outputFile.toAbsolutePath().normalize());
+        Path writeTarget = (replaceExistingOutput || sameInputAndOutput) ? createSiblingTempFile(outputFile) : outputFile;
 
         try (PDDocument document = Loader.loadPDF(inputFile.toFile());
-             OutputStream outputStream = Files.newOutputStream(outputFile)) {
+             OutputStream outputStream = Files.newOutputStream(writeTarget)) {
             if (document.getNumberOfPages() == 0) {
                 throw new IllegalArgumentException("Il PDF selezionato non contiene pagine.");
             }
-            if (placement.pageIndex() < 0 || placement.pageIndex() >= document.getNumberOfPages()) {
-                throw new IllegalArgumentException("La pagina selezionata per la firma PDF non e valida.");
-            }
+
+            List<PdfVisibleSignaturePlacement> normalizedPlacements = validateAndNormalizePdfPlacements(document, placements);
 
             String resolvedSignerName = resolvePdfSignerName(signingMaterial.signerCertificate(), signerDisplayName);
             Calendar signingCalendar = Calendar.getInstance();
@@ -217,10 +248,8 @@ public final class SignatureService {
             signature.setReason("Firma PDF");
             signature.setSignDate(signingCalendar);
 
-            if (applyToEveryPage) {
-                stampVisibleSignatureOnEveryPage(document, placement, resolvedSignerName, signingCalendar);
-                document.addSignature(signature);
-            } else {
+            if (normalizedPlacements.size() == 1) {
+                PdfVisibleSignaturePlacement placement = normalizedPlacements.get(0);
                 signatureOptions = new SignatureOptions();
                 signatureOptions.setPreferredSignatureSize(SignatureOptions.DEFAULT_SIGNATURE_SIZE * 2);
                 signatureOptions.setPage(placement.pageIndex());
@@ -231,12 +260,19 @@ public final class SignatureService {
                         resolvedSignerName
                 ));
                 document.addSignature(signature, signatureOptions);
+            } else {
+                for (PdfVisibleSignaturePlacement placement : normalizedPlacements) {
+                    stampVisibleSignatureOnPage(document, placement, resolvedSignerName, signingCalendar);
+                }
+                document.addSignature(signature);
             }
 
             ExternalSigningSupport externalSigning = document.saveIncrementalForExternalSigning(outputStream);
             byte[] cmsSignature = signDetachedPdfContent(signingMaterial, externalSigning.getContent());
             externalSigning.setSignature(cmsSignature);
-            return outputFile;
+        } catch (Exception ex) {
+            deleteTempFileQuietly(writeTarget, outputFile);
+            throw ex;
         } finally {
             if (signatureOptions != null) {
                 try {
@@ -246,6 +282,73 @@ public final class SignatureService {
                 }
             }
         }
+
+        if (!writeTarget.equals(outputFile)) {
+            try {
+                replaceFile(writeTarget, outputFile);
+            } catch (IOException ex) {
+                deleteTempFileQuietly(writeTarget, outputFile);
+                throw ex;
+            }
+        }
+        return outputFile;
+    }
+
+    private List<PdfVisibleSignaturePlacement> expandPlacementToEveryPage(
+            Path inputFile,
+            PdfVisibleSignaturePlacement placement
+    ) throws IOException {
+        if (placement == null) {
+            throw new IllegalArgumentException("La posizione della firma PDF non e stata definita.");
+        }
+
+        try (PDDocument document = Loader.loadPDF(inputFile.toFile())) {
+            if (document.getNumberOfPages() == 0) {
+                throw new IllegalArgumentException("Il PDF selezionato non contiene pagine.");
+            }
+            if (placement.pageIndex() < 0 || placement.pageIndex() >= document.getNumberOfPages()) {
+                throw new IllegalArgumentException("La pagina selezionata per la firma PDF non e valida.");
+            }
+
+            List<PdfVisibleSignaturePlacement> placements = new ArrayList<>();
+            for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
+                placements.add(remapPdfPlacement(document, placement, pageIndex));
+            }
+            return List.copyOf(placements);
+        }
+    }
+
+    private List<PdfVisibleSignaturePlacement> validateAndNormalizePdfPlacements(
+            PDDocument document,
+            List<PdfVisibleSignaturePlacement> placements
+    ) {
+        List<PdfVisibleSignaturePlacement> normalizedPlacements = new ArrayList<>();
+        for (PdfVisibleSignaturePlacement placement : placements) {
+            if (placement == null) {
+                throw new IllegalArgumentException("La lista delle posizioni PDF contiene un elemento non valido.");
+            }
+            if (placement.pageIndex() < 0 || placement.pageIndex() >= document.getNumberOfPages()) {
+                throw new IllegalArgumentException("Una delle pagine selezionate per la firma PDF non e valida.");
+            }
+            normalizedPlacements.add(normalizePdfPlacement(document, placement));
+        }
+
+        normalizedPlacements.sort(Comparator.comparingInt(PdfVisibleSignaturePlacement::pageIndex));
+        return List.copyOf(normalizedPlacements);
+    }
+
+    private PdfVisibleSignaturePlacement normalizePdfPlacement(
+            PDDocument document,
+            PdfVisibleSignaturePlacement placement
+    ) {
+        PDRectangle pageBox = document.getPage(placement.pageIndex()).getCropBox();
+        float maxWidth = Math.max(72f, pageBox.getWidth() - 56f);
+        float maxHeight = Math.max(36f, pageBox.getHeight() - 56f);
+        float width = Math.max(72f, Math.min(maxWidth, placement.width()));
+        float height = Math.max(36f, Math.min(maxHeight, placement.height()));
+        float x = Math.max(28f, Math.min(pageBox.getWidth() - width - 28f, placement.x()));
+        float y = Math.max(28f, Math.min(pageBox.getHeight() - height - 28f, placement.y()));
+        return new PdfVisibleSignaturePlacement(placement.pageIndex(), x, y, width, height);
     }
 
     @SuppressWarnings("unchecked")
@@ -327,6 +430,48 @@ public final class SignatureService {
 
         Files.write(outputFile, signedData.getEncoded());
         return outputFile;
+    }
+
+    private Path createSiblingTempFile(Path outputFile) throws IOException {
+        Path absoluteOutput = outputFile.toAbsolutePath();
+        Path parent = absoluteOutput.getParent();
+        if (parent == null) {
+            parent = Path.of(".").toAbsolutePath().normalize();
+        }
+
+        String fileName = absoluteOutput.getFileName().toString();
+        String prefix = stripTempFileExtension(fileName);
+        if (prefix.length() < 3) {
+            prefix = (prefix + "___").substring(0, 3);
+        }
+        return Files.createTempFile(parent, prefix + "-", ".tmp");
+    }
+
+    private String stripTempFileExtension(String fileName) {
+        int separatorIndex = fileName.lastIndexOf('.');
+        if (separatorIndex <= 0) {
+            return fileName;
+        }
+        return fileName.substring(0, separatorIndex);
+    }
+
+    private void replaceFile(Path sourceFile, Path targetFile) throws IOException {
+        try {
+            Files.move(sourceFile, targetFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException ex) {
+            Files.move(sourceFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private void deleteTempFileQuietly(Path candidate, Path finalOutput) {
+        if (candidate == null || candidate.equals(finalOutput)) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(candidate);
+        } catch (IOException ignored) {
+            // Mantiene l'errore originale della firma come causa principale.
+        }
     }
 
     private byte[] signDetachedPdfContent(LoadedSigningMaterial signingMaterial, InputStream contentStream) throws Exception {
