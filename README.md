@@ -37,8 +37,9 @@ Applicazione desktop Windows per firma digitale e verifica documenti, con suppor
 
 ### Firma multipagina automatica
 
-- opzione `Firma su ogni pagina`
-- la firma grafica viene replicata su tutte le pagine del PDF nello stesso punto relativo scelto dall'utente
+- `Conferma posizione su questa pagina` aggiunge un riquadro alla pagina corrente
+- `Applica a tutte le pagine` sostituisce i riquadri di quel documento e replica la posizione relativa scelta
+- `Annulla ultima modifica` ripristina le posizioni precedenti del documento corrente
 
 ### Verifica file firmati
 
@@ -59,6 +60,7 @@ Applicazione desktop Windows per firma digitale e verifica documenti, con suppor
 
 Se il file di destinazione esiste gia, OpenFirma propone:
 
+- `Mantieni entrambi`, con anteprima del primo nome libero
 - `SOVRASCRIVI`
 - `ANNULLA`
 - `VERIFICA FILE`
@@ -98,7 +100,7 @@ Questa versione e gia avviabile su Windows e include il runtime Java necessario.
 ### Requisiti per la versione gia pronta
 
 - Windows
-- certificato di firma disponibile in `Windows-MY` oppure dispositivo correttamente esposto al sistema
+- per firmare, certificato disponibile in `Windows-MY` oppure dispositivo correttamente esposto al sistema
 - middleware del token installato, se richiesto
 
 Per la sola versione in `release/OpenFirma` non e necessario installare Java separatamente, perche il runtime e gia incluso.
@@ -109,29 +111,29 @@ Per la sola versione in `release/OpenFirma` non e necessario installare Java sep
 
 1. Avvia OpenFirma.
 2. Seleziona il certificato nel blocco `Seleziona Certificato`.
-3. Carica uno o piu file in `FILE DA FIRMARE`.
+3. Trascina i documenti in `FILE DA FIRMARE` oppure seleziona `Aggiungi file…` con il mouse o con `Tab` e `Invio`.
 4. Controlla `Cartella destinazione`.
 5. In `Tipo firma` scegli `Busta P7M`.
 6. Premi `Firma file`.
 7. Gestisci eventuali conflitti di output.
-8. Attendi il completamento della firma.
+8. Nel riepilogo controlla quanti file sono stati creati e quanti hanno superato la verifica locale. Su un file evidenziato puoi premere `Verifica di nuovo`. `Apri cartella di destinazione` individua il documento in Esplora file.
 
 ### 2. Firma PDF con firma grafica
 
 1. Avvia OpenFirma.
 2. Seleziona il certificato.
 3. Carica uno o piu PDF.
-4. In `Tipo firma` scegli `PDF`.
+4. In `Tipo firma` scegli `PDF` e controlla il nome del risultato accanto a ciascun file. Se un documento è incompatibile, puoi rimuoverlo oppure scegliere `Usa P7M per tutti`.
 5. Premi `Firma file`.
 6. Nel popup usa le tab per passare da un documento all'altro.
 7. Regola la preview con zoom o `Adatta larghezza`.
-8. Posiziona il riquadro firma.
-9. Se necessario attiva `Firma su ogni pagina`.
+8. Posiziona il riquadro e premi `Conferma posizione su questa pagina`. Usa `Vai a pagina…` per raggiungere un'altra pagina e controlla l'elenco delle pagine confermate.
+9. Per replicare la posizione sull'intero documento scegli `Applica a tutte le pagine`. Puoi ripristinare la situazione precedente con `Annulla ultima modifica`.
 10. Premi `Avvia firma`.
 
 ### 3. Verifica di file firmati
 
-1. Premi `Verifica`.
+1. Premi `Verifica documenti`. Puoi farlo anche senza smart card.
 2. Carica uno o piu file firmati con drag-and-drop o selezione manuale.
 3. Premi `Verifica`.
 4. Consulta i risultati nelle schede finali.

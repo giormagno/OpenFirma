@@ -148,6 +148,10 @@ public final class SignatureService {
     }
 
     public Path signFile(SignatureConfig config, String alias, Path inputFile, Path outputFile) throws Exception {
+        return signFile(config, alias, inputFile, outputFile, true);
+    }
+
+    Path signFile(SignatureConfig config, String alias, Path inputFile, Path outputFile, boolean allowOverwrite) throws Exception {
         if (inputFile == null || !Files.exists(inputFile)) {
             throw new IllegalArgumentException("File non trovato: " + inputFile);
         }
@@ -161,10 +165,9 @@ public final class SignatureService {
         }
 
         LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
-        boolean replaceExistingOutput = Files.exists(outputFile);
-        Path writeTarget = replaceExistingOutput ? createSiblingTempFile(outputFile) : outputFile;
+        Path writeTarget = createSiblingTempFile(outputFile);
         try {
-            Path signedOutput = signSingleFile(
+            signSingleFile(
                     signingMaterial.privateKey(),
                     signingMaterial.signatureProviderName(),
                     signingMaterial.signerCertificate(),
@@ -172,10 +175,8 @@ public final class SignatureService {
                     inputFile,
                     writeTarget
             );
-            if (replaceExistingOutput) {
-                replaceFile(writeTarget, outputFile);
-            }
-            return replaceExistingOutput ? outputFile : signedOutput;
+            publishSignedFile(writeTarget, outputFile, allowOverwrite);
+            return outputFile;
         } catch (Exception ex) {
             deleteTempFileQuietly(writeTarget, outputFile);
             throw ex;
@@ -208,6 +209,11 @@ public final class SignatureService {
             List<PdfVisibleSignaturePlacement> placements,
             String signerDisplayName
     ) throws Exception {
+        return signPdfFile(config, alias, inputFile, outputFile, placements, signerDisplayName, true);
+    }
+
+    Path signPdfFile(SignatureConfig config, String alias, Path inputFile, Path outputFile,
+                     List<PdfVisibleSignaturePlacement> placements, String signerDisplayName, boolean allowOverwrite) throws Exception {
         if (inputFile == null || !Files.exists(inputFile)) {
             throw new IllegalArgumentException("File PDF non trovato: " + inputFile);
         }
@@ -225,9 +231,7 @@ public final class SignatureService {
 
         LoadedSigningMaterial signingMaterial = loadSigningMaterial(config, alias);
         SignatureOptions signatureOptions = null;
-        boolean replaceExistingOutput = Files.exists(outputFile);
-        boolean sameInputAndOutput = inputFile.toAbsolutePath().normalize().equals(outputFile.toAbsolutePath().normalize());
-        Path writeTarget = (replaceExistingOutput || sameInputAndOutput) ? createSiblingTempFile(outputFile) : outputFile;
+        Path writeTarget = createSiblingTempFile(outputFile);
 
         try (PDDocument document = Loader.loadPDF(inputFile.toFile());
              OutputStream outputStream = Files.newOutputStream(writeTarget)) {
@@ -283,13 +287,11 @@ public final class SignatureService {
             }
         }
 
-        if (!writeTarget.equals(outputFile)) {
-            try {
-                replaceFile(writeTarget, outputFile);
-            } catch (IOException ex) {
-                deleteTempFileQuietly(writeTarget, outputFile);
-                throw ex;
-            }
+        try {
+            publishSignedFile(writeTarget, outputFile, allowOverwrite);
+        } catch (IOException ex) {
+            deleteTempFileQuietly(writeTarget, outputFile);
+            throw ex;
         }
         return outputFile;
     }
@@ -455,7 +457,11 @@ public final class SignatureService {
         return fileName.substring(0, separatorIndex);
     }
 
-    private void replaceFile(Path sourceFile, Path targetFile) throws IOException {
+    private void publishSignedFile(Path sourceFile, Path targetFile, boolean allowOverwrite) throws IOException {
+        if (!allowOverwrite) {
+            Files.move(sourceFile, targetFile);
+            return;
+        }
         try {
             Files.move(sourceFile, targetFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException ex) {

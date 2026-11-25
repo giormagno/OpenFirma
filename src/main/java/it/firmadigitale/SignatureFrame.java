@@ -130,10 +130,12 @@ public final class SignatureFrame extends JFrame {
     private final JLabel statusLabel = new JLabel("Pronto");
     private final JLabel activeAssetLabel = new JLabel("Focused asset");
     private final JButton logButton = new JButton("LOG");
-    private final JButton verifyButton = new JButton("Verifica");
+    private final JButton verifyButton = new JButton("Verifica documenti");
     private final JButton loadCertificatesButton = new JButton("Aggiorna certificati");
     private final InfoIconLabel certificateInfoIcon = new InfoIconLabel();
-    private final LinkLabel browseFilesLinkLabel = new LinkLabel("NAVIGA TRA LE CARTELLE");
+    private final JButton browseFilesButton = new JButton("Aggiungi file…");
+    private final JButton useP7mButton = new JButton("Usa P7M per tutti");
+    private boolean loadingCertificates;
     private final JButton browseOutputButton = new JButton("Scegli");
     private final JButton removeFileButton = new JButton("Rimuovi selezionato");
     private final JButton clearFilesButton = new JButton("Svuota coda");
@@ -158,7 +160,7 @@ public final class SignatureFrame extends JFrame {
         setIconImage(createSvgImage("/design/icon/logo.svg", new Dimension(64, 64)));
 
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(650, 760));
+        setMinimumSize(new Dimension(650, Math.min(540, computeInitialWindowSize().height)));
 
         setContentPane(buildRootPanel());
         setSize(computeInitialWindowSize());
@@ -362,7 +364,7 @@ public final class SignatureFrame extends JFrame {
         return configureUploadDropZone(
                 dropZonePanel,
                 "FILE DA FIRMARE",
-                browseFilesLinkLabel,
+                browseFilesButton,
                 new FileDropHandler(),
                 () -> {
                     if (!busy) {
@@ -375,7 +377,7 @@ public final class SignatureFrame extends JFrame {
     private JPanel configureUploadDropZone(
             DropSurfacePanel targetPanel,
             String titleText,
-            LinkLabel browseLinkLabel,
+            JButton browseButton,
             TransferHandler transferHandler,
             Runnable browseAction
     ) {
@@ -418,8 +420,12 @@ public final class SignatureFrame extends JFrame {
         orLabel.setForeground(TEXT_MUTED);
         orLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        browseLinkLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        browseLinkLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        styleButton(browseButton, false);
+        browseButton.setFocusPainted(true);
+        browseButton.setAlignmentX(Component.CENTER_ALIGNMENT);
+        browseButton.addActionListener(event -> browseAction.run());
+        browseButton.getInputMap().put(javax.swing.KeyStroke.getKeyStroke("pressed ENTER"), "pressed");
+        browseButton.getInputMap().put(javax.swing.KeyStroke.getKeyStroke("released ENTER"), "released");
 
         content.add(Box.createVerticalGlue());
         content.add(glyph);
@@ -430,7 +436,7 @@ public final class SignatureFrame extends JFrame {
         content.add(Box.createVerticalStrut(2));
         content.add(orLabel);
         content.add(Box.createVerticalStrut(2));
-        content.add(browseLinkLabel);
+        content.add(browseButton);
         content.add(Box.createVerticalGlue());
 
         targetPanel.add(content, BorderLayout.CENTER);
@@ -494,6 +500,7 @@ public final class SignatureFrame extends JFrame {
         JPanel footerPanel = new JPanel(new BorderLayout(12, 0));
         footerPanel.setOpaque(false);
         footerPanel.add(clearFilesButton, BorderLayout.WEST);
+        footerPanel.add(useP7mButton, BorderLayout.CENTER);
 
         JPanel removePanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
         removePanel.setOpaque(false);
@@ -642,7 +649,6 @@ public final class SignatureFrame extends JFrame {
         styleInput(outputField);
         styleOutputField(outputField);
         styleInfoIcon(certificateInfoIcon);
-        styleLinkLabel(browseFilesLinkLabel);
         styleButton(verifyButton, false);
         styleButton(logButton, false);
         certificateCountLabel.setOpaque(true);
@@ -669,7 +675,7 @@ public final class SignatureFrame extends JFrame {
         signingModeCombo.setPreferredSize(new Dimension(136, 34));
         signingModeCombo.setMinimumSize(new Dimension(136, 34));
         signingModeCombo.setMaximumSize(new Dimension(136, 34));
-        verifyButton.setPreferredSize(new Dimension(90, 40));
+        verifyButton.setPreferredSize(new Dimension(148, 40));
         logButton.setPreferredSize(new Dimension(82, 40));
         progressBar.setPreferredSize(new Dimension(170, 18));
         updateCertificateCountBadge(0);
@@ -681,14 +687,6 @@ public final class SignatureFrame extends JFrame {
         browseOutputButton.addActionListener(event -> selectOutputDirectory());
         logButton.addActionListener(event -> showLogPopup());
         verifyButton.addActionListener(event -> verifySignedFileFromChooser());
-        browseFilesLinkLabel.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseClicked(MouseEvent event) {
-                if (browseFilesLinkLabel.isEnabled()) {
-                    addFilesFromChooser();
-                }
-            }
-        });
         certificateInfoIcon.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent event) {
@@ -701,6 +699,8 @@ public final class SignatureFrame extends JFrame {
         removeFileButton.addActionListener(event -> removeSelectedFile());
         clearFilesButton.addActionListener(event -> clearFiles());
         signButton.addActionListener(event -> signFiles());
+        useP7mButton.addActionListener(event -> signingModeCombo.setSelectedItem(SigningModeOption.ENVELOPED));
+        styleButton(useP7mButton, false);
         signingModeCombo.addActionListener(event -> {
             refreshFileDetails();
             updateActionState();
@@ -805,19 +805,9 @@ public final class SignatureFrame extends JFrame {
         updateActionState();
     }
 
-    private void clearFilesAfterSuccessfulSigning() {
-        if (fileQueueModel.getSize() == 0) {
-            return;
-        }
-
-        fileQueueModel.removeAllElements();
-        appendLog("Coda file svuotata automaticamente dopo la firma completata.");
-        refreshFileDetails();
-        updateActionState();
-    }
-
     private void loadCertificates() {
-        setBusy(true, "Lettura certificati da Windows-MY in corso...");
+        loadingCertificates = true;
+        updateActionState();
         appendLog("Carico i certificati disponibili in Windows-MY...");
 
         SwingWorker<List<SigningIdentity>, Void> worker = new SwingWorker<>() {
@@ -842,18 +832,15 @@ public final class SignatureFrame extends JFrame {
                     appendLog("Certificati caricati: " + identities.size());
                     updateCertificateCountBadge(identities.size());
                     refreshCertificateInfoState();
-                    setBusy(false, identities.isEmpty() ? "Nessun certificato di firma trovato in Windows-MY." : "Certificati pronti.");
-
-                    if (identities.isEmpty()) {
-                        showError("Nessun certificato adatto alla firma trovato nello store Windows.");
-                    }
+                    statusLabel.setText(identities.isEmpty() ? "Verifica documenti disponibile." : "Certificati pronti.");
                 } catch (Exception ex) {
                     identityCombo.removeAllItems();
                     updateCertificateCountBadge(0);
                     refreshCertificateInfoState();
-                    setBusy(false, "Errore nel caricamento certificati.");
-                    showError(resolveMessage(ex));
+                    appendLog("Lettura certificati fallita: " + resolveMessage(ex));
+                    certificateCountLabel.setToolTipText(resolveMessage(ex));
                 } finally {
+                    loadingCertificates = false;
                     updateActionState();
                 }
             }
@@ -891,7 +878,7 @@ public final class SignatureFrame extends JFrame {
             return;
         }
 
-        Map<Path, Path> outputTargets = resolveOutputTargets(files, outputDirectory, signingMode);
+        OutputPlan outputTargets = resolveOutputTargets(files, outputDirectory, signingMode);
         if (outputTargets == null) {
             return;
         }
@@ -903,11 +890,11 @@ public final class SignatureFrame extends JFrame {
             SigningIdentity selectedIdentity,
             Path outputDirectory,
             List<Path> files,
-            Map<Path, Path> outputTargets,
+            OutputPlan outputTargets,
             SigningModeOption signingMode,
             Map<Path, PdfSigningPlan> pdfPlans
     ) {
-        SigningProgressDialog signingDialog = new SigningProgressDialog(selectedIdentity, outputDirectory, files, outputTargets);
+        SigningProgressDialog signingDialog = new SigningProgressDialog(selectedIdentity, outputDirectory, files, outputTargets.paths());
         String signingLabel = signingMode == SigningModeOption.PDF ? "PDF" : "P7M";
 
         setBusy(true, "Firma " + signingLabel + " in corso su " + files.size() + " file...");
@@ -915,13 +902,16 @@ public final class SignatureFrame extends JFrame {
                 + selectedIdentity.displayName() + ".");
         signingDialog.open();
 
-        SwingWorker<List<Path>, SigningFileUpdate> worker = new SwingWorker<>() {
+        SwingWorker<Void, SigningFileUpdate> worker = new SwingWorker<>() {
+            private final List<SigningFileUpdate> created = new ArrayList<>();
+            private Path activeInput;
+
             @Override
-            protected List<Path> doInBackground() throws Exception {
-                List<Path> results = new ArrayList<>();
+            protected Void doInBackground() throws Exception {
                 for (int index = 0; index < files.size(); index++) {
                     Path file = files.get(index);
-                    publish(new SigningFileUpdate(file, null, index, files.size(), false));
+                    activeInput = file;
+                    publish(new SigningFileUpdate(file, null, index, null));
                     Path result;
                     if (signingMode == SigningModeOption.PDF) {
                         PdfSigningPlan pdfPlan = pdfPlans == null ? null : pdfPlans.get(file);
@@ -929,23 +919,23 @@ public final class SignatureFrame extends JFrame {
                                 buildConfig(),
                                 selectedIdentity.alias(),
                                 file,
-                                outputTargets.get(file),
+                                outputTargets.paths().get(file),
                                 pdfPlan == null ? null : pdfPlan.placements(),
-                                selectedIdentity.displayName()
+                                selectedIdentity.displayName(), outputTargets.overwrites().contains(file)
                         );
                     } else {
                         result = signatureService.signFile(
                                 buildConfig(),
                                 selectedIdentity.alias(),
                                 file,
-                                outputTargets.get(file)
+                                outputTargets.paths().get(file), outputTargets.overwrites().contains(file)
                         );
                     }
-                    boolean verified = signatureService.verifySignature(result);
-                    results.add(result);
-                    publish(new SigningFileUpdate(file, result, index + 1, files.size(), verified));
+                    SigningFileUpdate update = new SigningFileUpdate(file, result, index + 1, checkOutput(result));
+                    created.add(update);
+                    publish(update);
                 }
-                return results;
+                return null;
             }
 
             @Override
@@ -956,25 +946,22 @@ public final class SignatureFrame extends JFrame {
                         continue;
                     }
 
-                    appendLog("Creato " + update.outputFile() + " | verifica locale: " + (update.verified() ? "OK" : "KO"));
-                    signingDialog.markCompleted(update.inputFile(), update.outputFile(), update.verified(), update.completedCount());
+                    appendLog("Creato " + update.outputFile() + " | " + update.verification().detail());
+                    signingDialog.markCompleted(update);
                 }
             }
 
             @Override
             protected void done() {
                 try {
-                    List<Path> results = get();
-                    setBusy(false, "Firma " + signingLabel + " completata: " + results.size() + " file prodotti.");
-                    signingDialog.markSuccess(results.size());
-                    clearFilesAfterSuccessfulSigning();
+                    get();
+                    signingDialog.finish(created, null, null);
                 } catch (Exception ex) {
-                    setBusy(false, "Errore durante la firma.");
-                    String message = resolveMessage(ex);
-                    signingDialog.markFailure(message);
-                    showError(message);
+                    signingDialog.finish(created, activeInput, resolveMessage(ex));
                 } finally {
-                    updateActionState();
+                    for (SigningFileUpdate update : created) fileQueueModel.removeElement(update.inputFile());
+                    setBusy(false, signingDialog.subtitleLabel.getText());
+                    refreshFileDetails();
                 }
             }
         };
@@ -998,8 +985,7 @@ public final class SignatureFrame extends JFrame {
     private void showVerifyQueuePopup() {
         DefaultComboBoxModel<Path> verificationModel = new DefaultComboBoxModel<>();
         DropSurfacePanel verificationDropPanel = new DropSurfacePanel();
-        LinkLabel browseVerificationLink = new LinkLabel("NAVIGA TRA LE CARTELLE");
-        styleLinkLabel(browseVerificationLink);
+        JButton browseVerificationButton = new JButton("Aggiungi file…");
 
         JDialog dialog = new JDialog(this, "Verifica file", true);
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -1064,7 +1050,7 @@ public final class SignatureFrame extends JFrame {
         configureUploadDropZone(
                 verificationDropPanel,
                 "FILE DA VERIFICARE",
-                browseVerificationLink,
+                browseVerificationButton,
                 verificationTransferHandler,
                 () -> addVerificationFilesFromChooser(verificationModel, fileCountBadge, hintLabel, listContainer, listScrollPane, verifyActionButton, clearButton, dialog)
         );
@@ -1227,32 +1213,33 @@ public final class SignatureFrame extends JFrame {
         return List.copyOf(paths);
     }
 
-    private Map<Path, Path> resolveOutputTargets(List<Path> files, Path outputDirectory, SigningModeOption signingMode) {
+    private record OutputPlan(Map<Path, Path> paths, java.util.Set<Path> overwrites) {}
+
+    private OutputPlan resolveOutputTargets(List<Path> files, Path outputDirectory, SigningModeOption signingMode) {
         Map<Path, Path> outputTargets = new LinkedHashMap<>();
-        List<Path> conflictingFiles = new ArrayList<>();
         for (Path file : files) {
-            Path outputFile = resolveSignedOutputPath(file, outputDirectory, signingMode);
-            outputTargets.put(file, outputFile);
-            if (Files.exists(outputFile)) {
-                conflictingFiles.add(file);
-            }
+            outputTargets.put(file, resolveSignedOutputPath(file, outputDirectory, signingMode));
         }
-
-        if (conflictingFiles.isEmpty()) {
-            return outputTargets;
-        }
-
-        appendLog("Rilevati " + conflictingFiles.size() + " file gia presenti nella cartella di destinazione.");
-        for (int index = 0; index < conflictingFiles.size(); index++) {
-            Path inputFile = conflictingFiles.get(index);
-            while (true) {
-                Path targetOutput = outputTargets.get(inputFile);
-                if (!Files.exists(targetOutput)) {
+        java.util.Set<Path> claimed = new java.util.HashSet<>();
+        java.util.Set<Path> overwrites = new java.util.HashSet<>();
+        for (Path inputFile : files) {
+            Path targetOutput = outputTargets.get(inputFile);
+            boolean reserved = claimed.contains(targetOutput) || files.stream().anyMatch(other ->
+                    !other.equals(inputFile) && other.toAbsolutePath().normalize().equals(targetOutput.toAbsolutePath().normalize()));
+            while (reserved || Files.exists(targetOutput)) {
+                String suggestedName = suggestRenameOutputFileName(inputFile, targetOutput, outputDirectory, outputTargets, signingMode);
+                OverwriteDialogChoice choice = showOverwriteConflictPopup(targetOutput, suggestedName, reserved);
+                if (choice == OverwriteDialogChoice.KEEP_BOTH) {
+                    Path suggested = outputDirectory.resolve(suggestedName);
+                    if (Files.exists(suggested)) {
+                        continue;
+                    }
+                    outputTargets.put(inputFile, suggested);
+                    appendLog("Mantieni entrambi: " + suggested.getFileName());
                     break;
                 }
-
-                OverwriteDialogChoice choice = showOverwriteConflictPopup(targetOutput, index + 1, conflictingFiles.size());
                 if (choice == OverwriteDialogChoice.OVERWRITE) {
+                    overwrites.add(inputFile);
                     appendLog("Sovrascrittura confermata per " + targetOutput.getFileName() + ".");
                     break;
                 }
@@ -1275,11 +1262,12 @@ public final class SignatureFrame extends JFrame {
                 appendLog("Output rinominato per " + inputFile.getFileName() + ": " + renamedOutput.getFileName() + ".");
                 break;
             }
+            claimed.add(outputTargets.get(inputFile));
         }
-        return outputTargets;
+        return new OutputPlan(Map.copyOf(outputTargets), java.util.Set.copyOf(overwrites));
     }
 
-    private OverwriteDialogChoice showOverwriteConflictPopup(Path existingOutput, int currentConflict, int totalConflicts) {
+    private OverwriteDialogChoice showOverwriteConflictPopup(Path existingOutput, String suggestedName, boolean reserved) {
         OverwriteDialogChoice[] choice = new OverwriteDialogChoice[]{OverwriteDialogChoice.CANCEL};
 
         JDialog dialog = new JDialog(this, "File gia presente", true);
@@ -1293,11 +1281,10 @@ public final class SignatureFrame extends JFrame {
         JPanel headerPanel = new JPanel(new BorderLayout(0, 8));
         headerPanel.setOpaque(false);
         headerPanel.add(createSectionTitle("File gia presente"), BorderLayout.NORTH);
-        headerPanel.add(createSectionSubtitle("Esiste gia un output con lo stesso nome nella cartella di destinazione."), BorderLayout.SOUTH);
+        headerPanel.add(createSectionSubtitle(reserved ? "Due documenti in coda hanno lo stesso nome di destinazione." : "Esiste già un file con questo nome nella cartella di destinazione."), BorderLayout.SOUTH);
 
         JPanel badgePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         badgePanel.setOpaque(false);
-        badgePanel.add(createInfoBadge(totalConflicts == 1 ? "1 conflitto" : currentConflict + " di " + totalConflicts));
         badgePanel.add(createInfoBadge(existingOutput.getFileName().toString()));
 
         JPanel detailsPanel = createQueueSurface();
@@ -1305,6 +1292,13 @@ public final class SignatureFrame extends JFrame {
         detailsPanel.add(createDialogDetailRow("Nome file", existingOutput.getFileName().toString()));
         detailsPanel.add(createDialogDetailRow("Percorso", existingOutput.toString()));
 
+        detailsPanel.add(createDialogDetailRow("Nome con «Mantieni entrambi»", suggestedName));
+        JButton keepButton = new JButton("Mantieni entrambi");
+        styleButton(keepButton, true);
+        keepButton.addActionListener(event -> {
+            choice[0] = OverwriteDialogChoice.KEEP_BOTH;
+            dialog.dispose();
+        });
         JButton renameButton = new JButton("RINOMINA");
         JButton verifyButton = new JButton("VERIFICA FILE");
         JButton cancelButton = new JButton("ANNULLA");
@@ -1312,7 +1306,10 @@ public final class SignatureFrame extends JFrame {
         styleButton(renameButton, false);
         styleButton(verifyButton, false);
         styleButton(cancelButton, false);
-        styleButton(overwriteButton, true);
+        styleButton(overwriteButton, false);
+        overwriteButton.setEnabled(!reserved);
+        verifyButton.setEnabled(Files.exists(existingOutput));
+        dialog.getRootPane().setDefaultButton(keepButton);
         renameButton.addActionListener(event -> {
             choice[0] = OverwriteDialogChoice.RENAME;
             dialog.dispose();
@@ -1336,6 +1333,7 @@ public final class SignatureFrame extends JFrame {
         footerPanel.add(verifyButton);
         footerPanel.add(cancelButton);
         footerPanel.add(overwriteButton);
+        footerPanel.add(keepButton);
 
         JPanel centerPanel = new JPanel();
         centerPanel.setOpaque(false);
@@ -1730,22 +1728,15 @@ public final class SignatureFrame extends JFrame {
             Map<Path, Path> outputTargets,
             SigningModeOption signingMode
     ) {
-        if (signingMode != SigningModeOption.PDF) {
-            return currentOutput.getFileName().toString();
+        String extension = signingMode == SigningModeOption.PDF ? ".pdf" : ".p7m";
+        String stem = stripTrailingExtension(currentOutput.getFileName().toString()) + "_firmato";
+        for (int index = 1; ; index++) {
+            String name = stem + (index == 1 ? "" : " (" + index + ")") + extension;
+            Path candidate = outputDirectory.resolve(name);
+            if (!Files.exists(candidate) && !isDuplicatePlannedOutput(inputFile, candidate, outputTargets)) {
+                return name;
+            }
         }
-
-        Path normalizedInput = inputFile.toAbsolutePath().normalize();
-        Path normalizedOutput = currentOutput.toAbsolutePath().normalize();
-        if (!normalizedInput.equals(normalizedOutput)) {
-            return currentOutput.getFileName().toString();
-        }
-
-        String candidateName = stripTrailingExtension(currentOutput.getFileName().toString()) + "_firmato.pdf";
-        Path candidateOutput = outputDirectory.resolve(candidateName);
-        if (Files.exists(candidateOutput) || isDuplicatePlannedOutput(inputFile, candidateOutput, outputTargets)) {
-            return currentOutput.getFileName().toString();
-        }
-        return candidateName;
     }
 
     private JPanel createDialogDetailRow(String labelText, String value) {
@@ -2128,7 +2119,10 @@ public final class SignatureFrame extends JFrame {
         nameLabel.setForeground(TEXT_PRIMARY);
         nameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        JLabel metaLabel = new JLabel(buildFileMeta(path));
+        boolean incompatible = getSelectedSigningMode() == SigningModeOption.PDF && !isPdfFile(path);
+        String outputName = resolveSignedOutputFileName(path, Path.of("."), getSelectedSigningMode());
+        JLabel metaLabel = new JLabel(incompatible ? "Incompatibile con la firma PDF" : "Risultato: " + outputName);
+        metaLabel.setToolTipText(buildFileMeta(path));
         metaLabel.setFont(new Font("Segoe UI", Font.BOLD, 9));
         metaLabel.setForeground(TEXT_MUTED);
         metaLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -2136,6 +2130,9 @@ public final class SignatureFrame extends JFrame {
         textPanel.add(nameLabel);
         textPanel.add(Box.createVerticalStrut(4));
         textPanel.add(metaLabel);
+        if (incompatible) {
+            metaLabel.setForeground(CERTIFICATE_BADGE_EMPTY);
+        }
 
         JButton removeButton = new JButton();
         removeButton.setFocusPainted(false);
@@ -2146,7 +2143,13 @@ public final class SignatureFrame extends JFrame {
         removeButton.setToolTipText("Rimuovi file dalla coda");
         removeButton.setPreferredSize(new Dimension(30, 30));
         removeButton.setIcon(createSvgIcon("/design/icon/delete.svg", new Dimension(18, 18)));
+        if (incompatible) {
+            removeButton.setIcon(null);
+            removeButton.setText("Rimuovi dalla coda");
+            removeButton.setPreferredSize(null);
+        }
         removeButton.addActionListener(event -> {
+            if (busy) return;
             fileQueueModel.removeElement(path);
             appendLog("Rimosso dalla coda: " + path.getFileName());
             refreshFileDetails();
@@ -2244,15 +2247,20 @@ public final class SignatureFrame extends JFrame {
         signingModeCombo.setEnabled(!busy);
         outputField.setEnabled(!busy);
         certificateInfoIcon.setEnabled(!busy && hasCertificate);
-        loadCertificatesButton.setEnabled(!busy);
-        browseFilesLinkLabel.setEnabled(!busy);
+        loadCertificatesButton.setEnabled(!busy && !loadingCertificates);
+        browseFilesButton.setEnabled(!busy);
+        browseOutputButton.setEnabled(!busy);
         verifyButton.setEnabled(!busy);
         fileQueueCombo.setEnabled(!busy && hasFiles);
         fileQueueCombo.setVisible(hasFiles);
         activeAssetLabel.setVisible(hasFiles);
         removeFileButton.setEnabled(!busy && hasFiles && fileQueueCombo.getSelectedItem() != null);
         clearFilesButton.setEnabled(!busy && hasFiles);
-        signButton.setEnabled(!busy && hasFiles && hasCertificate);
+        boolean incompatible = getSelectedSigningMode() == SigningModeOption.PDF
+                && getQueuedFiles().stream().anyMatch(file -> !isPdfFile(file));
+        useP7mButton.setVisible(incompatible);
+        useP7mButton.setEnabled(!busy);
+        signButton.setEnabled(!busy && !loadingCertificates && hasFiles && hasCertificate && !incompatible);
         signButton.setText(hasFiles ? "Firma " + fileQueueModel.getSize() + " file" : "Firma file");
     }
 
@@ -2319,7 +2327,32 @@ public final class SignatureFrame extends JFrame {
         dialog.setVisible(true);
     }
 
-    private record SigningFileUpdate(Path inputFile, Path outputFile, int completedCount, int totalCount, boolean verified) {
+    private record OutputVerification(boolean verified, String detail) {}
+
+    private OutputVerification checkOutput(Path output) {
+        try {
+            boolean valid = signatureService.verifySignature(output);
+            return new OutputVerification(valid, valid ? "Verifica locale OK" : "Verifica locale fallita");
+        } catch (Exception ex) {
+            return new OutputVerification(false, "Verifica locale fallita: " + resolveMessage(ex));
+        }
+    }
+
+    private record SigningFileUpdate(Path inputFile, Path outputFile, int completedCount, OutputVerification verification) {}
+
+    private void revealOutput(Path output) {
+        try {
+            Desktop desktop = Desktop.getDesktop();
+            if (desktop.isSupported(Desktop.Action.BROWSE_FILE_DIR)) {
+                desktop.browseFileDirectory(output.toAbsolutePath().toFile());
+            } else if (System.getProperty("os.name", "").startsWith("Windows")) {
+                new ProcessBuilder("explorer.exe", "/select,", output.toAbsolutePath().toString()).start();
+            } else {
+                desktop.open(output.toAbsolutePath().getParent().toFile());
+            }
+        } catch (Exception ex) {
+            showError("Impossibile aprire la cartella di destinazione: " + resolveMessage(ex));
+        }
     }
 
     private record SignedFileVerificationResult(
@@ -2339,6 +2372,7 @@ public final class SignatureFrame extends JFrame {
         OVERWRITE,
         CANCEL,
         INSPECT,
+        KEEP_BOTH,
         RENAME
     }
 
@@ -2351,6 +2385,10 @@ public final class SignatureFrame extends JFrame {
         private final JButton closeButton = new JButton("Chiudi");
         private final java.util.Map<Path, JLabel> statusLabels = new java.util.LinkedHashMap<>();
         private final java.util.Map<Path, JLabel> metaLabels = new java.util.LinkedHashMap<>();
+        private final Map<Path, JButton> retryButtons = new LinkedHashMap<>();
+        private final Map<Path, JButton> revealButtons = new LinkedHashMap<>();
+        private final Map<Path, SigningFileUpdate> results = new LinkedHashMap<>();
+        private String signingFailure;
         private final int totalFiles;
 
         private SigningProgressDialog(SigningIdentity identity, Path outputDirectory, List<Path> files, Map<Path, Path> outputTargets) {
@@ -2504,7 +2542,18 @@ public final class SignatureFrame extends JFrame {
 
             JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
             rightPanel.setOpaque(false);
+            JButton retry = new JButton("Verifica di nuovo");
+            JButton reveal = new JButton("Apri cartella di destinazione");
+            retryButtons.put(file, retry);
+            revealButtons.put(file, reveal);
+            retry.setVisible(false);
+            reveal.setVisible(false);
+            retry.addActionListener(event -> retryVerification(file));
+            reveal.addActionListener(event -> revealOutput(results.get(file).outputFile()));
+            rightPanel.setLayout(new javax.swing.BoxLayout(rightPanel, javax.swing.BoxLayout.Y_AXIS));
             rightPanel.add(statusBadge);
+            rightPanel.add(retry);
+            rightPanel.add(reveal);
 
             row.add(tokenPanel, BorderLayout.WEST);
             row.add(textPanel, BorderLayout.CENTER);
@@ -2536,40 +2585,87 @@ public final class SignatureFrame extends JFrame {
             }
         }
 
-        private void markCompleted(Path inputFile, Path outputFile, boolean verified, int completedCount) {
-            titleLabel.setText("Firma in corso");
-            subtitleLabel.setText("Creato " + outputFile.getFileName());
-            progress.setValue(completedCount);
-            progress.setString(completedCount + " / " + totalFiles);
-
-            JLabel statusBadge = statusLabels.get(inputFile);
-            if (statusBadge != null) {
-                setBadgeState(statusBadge, verified ? "VERIFICATO" : "FIRMATO", new Color(231, 243, 238), new Color(18, 97, 79));
-            }
-
-            JLabel metaLabel = metaLabels.get(inputFile);
-            if (metaLabel != null) {
-                metaLabel.setText("Output: " + outputFile + (verified ? "  |  verifica OK" : "  |  verifica KO"));
-                metaLabel.setToolTipText(metaLabel.getText());
-            }
+        private void markCompleted(SigningFileUpdate update) {
+            results.put(update.inputFile(), update);
+            progress.setValue(update.completedCount());
+            progress.setString(update.completedCount() + " / " + totalFiles);
+            displayVerification(update);
         }
 
-        private void markSuccess(int resultCount) {
-            titleLabel.setText("Firma completata");
-            subtitleLabel.setText(resultCount + (resultCount == 1 ? " file firmato correttamente." : " file firmati correttamente."));
-            setBadgeState(phaseBadge, "COMPLETATO", new Color(231, 243, 238), new Color(18, 97, 79));
-            progress.setValue(totalFiles);
-            progress.setString(totalFiles + " / " + totalFiles);
+        private void displayVerification(SigningFileUpdate update) {
+            Path file = update.inputFile();
+            boolean verified = update.verification().verified();
+            setBadgeState(statusLabels.get(file), verified ? "VERIFICATO" : "VERIFICA FALLITA",
+                    verified ? ACCENT_SOFT : CERTIFICATE_BADGE_EMPTY, verified ? TEXT_PRIMARY : Color.WHITE);
+            String detail = update.outputFile() + " | " + update.verification().detail();
+            metaLabels.get(file).setText(detail);
+            metaLabels.get(file).setToolTipText(detail);
+        }
+
+        private void finish(List<SigningFileUpdate> created, Path failedFile, String failure) {
+            signingFailure = failure;
+            for (SigningFileUpdate update : created) {
+                markCompleted(update);
+                retryButtons.get(update.inputFile()).setVisible(!update.verification().verified());
+                revealButtons.get(update.inputFile()).setVisible(true);
+            }
+            if (failure != null) {
+                for (Path file : statusLabels.keySet()) {
+                    if (results.containsKey(file)) continue;
+                    boolean failed = file.equals(failedFile);
+                    setBadgeState(statusLabels.get(file), failed ? "FIRMA FALLITA" : "NON ELABORATO",
+                            failed ? CERTIFICATE_BADGE_EMPTY : CARD_BACKGROUND, failed ? Color.WHITE : TEXT_PRIMARY);
+                    if (failed) {
+                        metaLabels.get(file).setText(failure);
+                        metaLabels.get(file).setToolTipText(failure);
+                    }
+                }
+                appendLog("Firma interrotta su " + failedFile + ": " + failure);
+            }
+            updateSummary();
             dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
             closeButton.setEnabled(true);
         }
 
-        private void markFailure(String message) {
-            titleLabel.setText("Errore durante la firma");
-            subtitleLabel.setText(message);
-            setBadgeState(phaseBadge, "ERRORE", new Color(182, 39, 52), Color.WHITE);
-            dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
-            closeButton.setEnabled(true);
+        private void updateSummary() {
+            long verified = results.values().stream().filter(item -> item.verification().verified()).count();
+            long failed = results.size() - verified;
+            String summary = results.size() + (results.size() == 1 ? " file creato. " : " file creati. ")
+                    + verified + (verified == 1 ? " verificato" : " verificati") + ", " + failed + " con verifica fallita.";
+            if (signingFailure != null) summary += " Da firmare: " + (totalFiles - results.size()) + ".";
+            subtitleLabel.setText(summary);
+            boolean success = signingFailure == null && failed == 0;
+            titleLabel.setText(signingFailure != null ? "Firma interrotta" : failed > 0 ? "Controlla i file evidenziati" : "Firma completata");
+            setBadgeState(phaseBadge, success ? "COMPLETATO" : "ATTENZIONE",
+                    success ? ACCENT_SOFT : CERTIFICATE_BADGE_EMPTY, success ? TEXT_PRIMARY : Color.WHITE);
+        }
+
+        private void retryVerification(Path file) {
+            SigningFileUpdate original = results.get(file);
+            JButton retry = retryButtons.get(file);
+            retry.setEnabled(false);
+            new SwingWorker<OutputVerification, Void>() {
+                @Override
+                protected OutputVerification doInBackground() {
+                    return checkOutput(original.outputFile());
+                }
+                @Override
+                protected void done() {
+                    try {
+                        OutputVerification verification = get();
+                        SigningFileUpdate update = new SigningFileUpdate(file, original.outputFile(), original.completedCount(), verification);
+                        results.put(file, update);
+                        displayVerification(update);
+                        retry.setVisible(!verification.verified());
+                        appendLog(original.outputFile() + " | " + verification.detail());
+                        updateSummary();
+                    } catch (Exception ex) {
+                        showError(resolveMessage(ex));
+                    } finally {
+                        retry.setEnabled(true);
+                    }
+                }
+            }.execute();
         }
 
         private JLabel createSummaryValue(String text) {
@@ -2597,12 +2693,16 @@ public final class SignatureFrame extends JFrame {
         private final List<Path> files;
         private final JDialog dialog;
         private final JTabbedPane documentTabs = new JTabbedPane();
-        private final JButton previousPageButton = new JButton("Pagina precedente");
-        private final JButton nextPageButton = new JButton("Pagina successiva");
+        private final JButton previousPageButton = new JButton("Precedente");
+        private final JButton nextPageButton = new JButton("Successiva");
         private final JButton zoomOutButton = new JButton("-");
         private final JButton zoomInButton = new JButton("+");
         private final JButton fitWidthButton = new JButton("Adatta larghezza");
-        private final JButton signAllPagesButton = new JButton("Firma tutte");
+        private final JButton confirmPageButton = new JButton("Conferma posizione su questa pagina");
+        private final JButton signAllPagesButton = new JButton("Applica a tutte le pagine");
+        private final JButton undoButton = new JButton("Annulla ultima modifica");
+        private final JButton goToPageButton = new JButton("Vai a pagina…");
+        private final Map<Path, Runnable> undoByDocument = new LinkedHashMap<>();
         private final JButton clearCurrentPageButton = new JButton("Rimuovi ultima firma");
         private final JButton resetPlacementButton = new JButton("Ripristina posizione");
         private final JButton cancelButton = new JButton("Annulla");
@@ -2645,6 +2745,9 @@ public final class SignatureFrame extends JFrame {
             styleButton(zoomOutButton, false);
             styleButton(zoomInButton, false);
             styleButton(fitWidthButton, false);
+            styleButton(confirmPageButton, true);
+            styleButton(undoButton, false);
+            styleButton(goToPageButton, false);
             styleButton(signAllPagesButton, false);
             styleButton(clearCurrentPageButton, false);
             styleButton(resetPlacementButton, false);
@@ -2663,7 +2766,7 @@ public final class SignatureFrame extends JFrame {
             documentTabs.setBackground(HEADER_SURFACE);
             documentTabs.setForeground(TEXT_PRIMARY);
             documentTabs.setOpaque(false);
-            documentTabs.setFocusable(false);
+            documentTabs.setFocusable(true);
             documentTabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
 
             previousPageButton.addActionListener(event -> shiftPage(-1));
@@ -2671,6 +2774,27 @@ public final class SignatureFrame extends JFrame {
             zoomOutButton.addActionListener(event -> adjustZoom(false));
             zoomInButton.addActionListener(event -> adjustZoom(true));
             fitWidthButton.addActionListener(event -> resetZoomToFitWidth());
+            confirmPageButton.addActionListener(event -> confirmPlacementOnCurrentPage(null));
+            undoButton.addActionListener(event -> {
+                Runnable undo = undoByDocument.remove(currentFile);
+                if (undo != null) {
+                    undo.run();
+                    refreshCurrentPreview();
+                }
+            });
+            goToPageButton.addActionListener(event -> {
+                int page = currentPageIndexes.get(currentFile) + 1;
+                int total = documentContexts.get(currentFile).getPageCount();
+                javax.swing.JSpinner spinner = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(page, 1, total, 1));
+                if (JOptionPane.showConfirmDialog(dialog, spinner, "Vai a pagina (1–" + total + ")", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
+                    try {
+                        spinner.commitEdit();
+                        shiftPage((Integer) spinner.getValue() - page);
+                    } catch (java.text.ParseException ex) {
+                        JOptionPane.showMessageDialog(dialog, "Inserisci un numero da 1 a " + total + ".");
+                    }
+                }
+            });
             signAllPagesButton.addActionListener(event -> confirmPlacementOnEveryPage());
             clearCurrentPageButton.addActionListener(event -> clearConfirmedPlacementOnCurrentPage());
             resetPlacementButton.addActionListener(event -> resetPlacement());
@@ -2723,7 +2847,7 @@ public final class SignatureFrame extends JFrame {
             headerPanel.setOpaque(false);
             headerPanel.add(createSectionTitle("Firma PDF"), BorderLayout.NORTH);
             headerPanel.add(
-                    createSectionSubtitle("Apparizioni visibili della firma sui documenti PDF."),
+                    createSectionSubtitle("Posiziona il riquadro e confermalo su ciascuna pagina da firmare."),
                     BorderLayout.SOUTH
             );
 
@@ -2737,23 +2861,29 @@ public final class SignatureFrame extends JFrame {
             leftToolbar.add(previousPageButton);
             leftToolbar.add(currentPageLabel);
             leftToolbar.add(nextPageButton);
-            leftToolbar.add(Box.createHorizontalStrut(10));
-            leftToolbar.add(zoomOutButton);
-            leftToolbar.add(zoomValueLabel);
-            leftToolbar.add(zoomInButton);
-            leftToolbar.add(fitWidthButton);
+            leftToolbar.add(goToPageButton);
 
-            JPanel rightToolbar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-            rightToolbar.setOpaque(false);
-            rightToolbar.add(signedPagesLabel);
-            rightToolbar.add(signAllPagesButton);
-            rightToolbar.add(clearCurrentPageButton);
-            rightToolbar.add(resetPlacementButton);
+            JPanel positionToolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            positionToolbar.setOpaque(false);
+            positionToolbar.add(confirmPageButton);
+            positionToolbar.add(signAllPagesButton);
+            positionToolbar.add(undoButton);
 
-            JPanel toolbarPanel = new JPanel(new BorderLayout(12, 0));
+            JPanel editToolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            editToolbar.setOpaque(false);
+            editToolbar.add(zoomOutButton);
+            editToolbar.add(zoomValueLabel);
+            editToolbar.add(zoomInButton);
+            editToolbar.add(fitWidthButton);
+            editToolbar.add(resetPlacementButton);
+            editToolbar.add(clearCurrentPageButton);
+
+            JPanel toolbarPanel = new JPanel(new java.awt.GridLayout(0, 1, 0, 3));
             toolbarPanel.setOpaque(false);
-            toolbarPanel.add(leftToolbar, BorderLayout.WEST);
-            toolbarPanel.add(rightToolbar, BorderLayout.EAST);
+            toolbarPanel.add(leftToolbar);
+            toolbarPanel.add(positionToolbar);
+            toolbarPanel.add(editToolbar);
+            toolbarPanel.add(signedPagesLabel);
 
             JPanel viewerPanel = createQueueSurface();
             viewerPanel.setLayout(new BorderLayout(0, 14));
@@ -2791,8 +2921,13 @@ public final class SignatureFrame extends JFrame {
 
         private void open() {
             dialog.pack();
-            dialog.setMinimumSize(new Dimension(1020, 820));
-            dialog.setSize(new Dimension(1080, 860));
+            java.awt.GraphicsConfiguration display = SignatureFrame.this.getGraphicsConfiguration();
+            Rectangle bounds = display.getBounds();
+            Insets insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(display);
+            int width = bounds.width - insets.left - insets.right;
+            int height = bounds.height - insets.top - insets.bottom;
+            dialog.setMinimumSize(new Dimension(Math.min(650, width), Math.min(450, height)));
+            dialog.setSize(new Dimension(Math.min(1080, width), Math.min(860, height)));
             dialog.setLocationRelativeTo(SignatureFrame.this);
             SwingUtilities.invokeLater(this::refreshCurrentPreview);
             dialog.setVisible(true);
@@ -2897,6 +3032,7 @@ public final class SignatureFrame extends JFrame {
 
             PdfDocumentContext context = documentContexts.get(currentFile);
             int pageIndex = currentPageIndexes.getOrDefault(currentFile, 0);
+            rememberPlacements();
             previewPlacements.get(currentFile).put(pageIndex, createDefaultPlacement(context, pageIndex));
             refreshCurrentPreview();
         }
@@ -2984,7 +3120,7 @@ public final class SignatureFrame extends JFrame {
         }
 
         private void refreshCurrentPreview() {
-            if (currentFile == null) {
+            if (currentFile == null || !documentContexts.containsKey(currentFile)) {
                 return;
             }
 
@@ -3020,30 +3156,26 @@ public final class SignatureFrame extends JFrame {
         }
 
         private void updateSignedPagesBadge() {
-            if (currentFile == null) {
-                applySignedPagesBadge("Firme: 0", new Color(241, 244, 246), TEXT_MUTED);
-                return;
-            }
-
-            int confirmedCount = countConfirmedPlacements(currentFile);
-            if (confirmedCount == 0) {
-                applySignedPagesBadge("Firme: 0", new Color(241, 244, 246), TEXT_MUTED);
-            } else {
-                applySignedPagesBadge("Firme: " + confirmedCount, ACCENT_SOFT, ACCENT);
-            }
+            List<Integer> pages = confirmedPlacements.get(currentFile).keySet().stream().sorted().toList();
+            String pageNumbers = pages.stream().map(index -> Integer.toString(index + 1))
+                    .collect(java.util.stream.Collectors.joining(", "));
+            String summary = pages.isEmpty() ? "Nessuna posizione confermata"
+                    : "Posizioni confermate " + (pages.size() == 1 ? "a pagina " : "sulle pagine ") + pageNumbers;
+            applySignedPagesBadge(summary, pages.isEmpty() ? CARD_BACKGROUND : ACCENT_SOFT, TEXT_PRIMARY);
+            signedPagesLabel.setToolTipText(summary);
+            undoButton.setEnabled(undoByDocument.containsKey(currentFile));
         }
 
-        private int countConfirmedPlacements(Path file) {
-            Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> placementsByPage = confirmedPlacements.get(file);
-            if (placementsByPage == null || placementsByPage.isEmpty()) {
-                return 0;
-            }
-
-            int total = 0;
-            for (List<SignatureService.PdfVisibleSignaturePlacement> placements : placementsByPage.values()) {
-                total += placements.size();
-            }
-            return total;
+        private void rememberPlacements() {
+            Path file = currentFile;
+            var preview = new LinkedHashMap<>(previewPlacements.get(file));
+            Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> confirmed = new LinkedHashMap<>();
+            confirmedPlacements.get(file).forEach((page, marks) -> confirmed.put(page, new ArrayList<>(marks)));
+            undoByDocument.put(file, () -> {
+                previewPlacements.put(file, preview);
+                confirmedPlacements.put(file, confirmed);
+            });
+            undoButton.setEnabled(true);
         }
 
         private void applySignedPagesBadge(String text, Color background, Color foreground) {
@@ -3059,11 +3191,11 @@ public final class SignatureFrame extends JFrame {
                 viewportWidth = previewScrollPane.getPreferredSize().width;
             }
 
-            int usableWidth = Math.max(360, viewportWidth - 48);
+            int usableWidth = Math.max(1, viewportWidth - 48);
             float fitWidthScale = usableWidth / pageBox.getWidth();
             float zoomFactor = zoomFactors.getOrDefault(currentFile, 1f);
             float renderScale = fitWidthScale * zoomFactor;
-            return Math.max(0.5f, Math.min(renderScale, 4.5f));
+            return Math.max(0.01f, Math.min(renderScale, 4.5f));
         }
 
         private Rectangle convertPlacementToDisplayRectangle(
@@ -3115,17 +3247,16 @@ public final class SignatureFrame extends JFrame {
                 previewPlacement = ensurePreviewPlacement(documentContexts.get(currentFile), currentFile, pageIndex);
             }
 
-            Rectangle displayRectangle = convertPlacementToDisplayRectangle(previewPlacement, currentRenderContext);
-            Rectangle centeredRectangle = clampRectangleToImage(
-                    new Rectangle(
-                            clickPoint.x - (displayRectangle.width / 2),
-                            clickPoint.y - (displayRectangle.height / 2),
-                            displayRectangle.width,
-                            displayRectangle.height
-                    ),
-                    currentRenderContext.image()
-            );
-            updateCurrentPlacementFromDisplayRectangle(centeredRectangle);
+            rememberPlacements();
+            if (clickPoint != null) {
+                Rectangle displayRectangle = convertPlacementToDisplayRectangle(previewPlacement, currentRenderContext);
+                Rectangle centeredRectangle = clampRectangleToImage(
+                        new Rectangle(clickPoint.x - displayRectangle.width / 2, clickPoint.y - displayRectangle.height / 2,
+                                displayRectangle.width, displayRectangle.height),
+                        currentRenderContext.image()
+                );
+                updateCurrentPlacementFromDisplayRectangle(centeredRectangle);
+            }
             SignatureService.PdfVisibleSignaturePlacement confirmedPlacement = previewPlacements.get(currentFile).get(pageIndex);
             confirmedPlacements.get(currentFile)
                     .computeIfAbsent(pageIndex, ignored -> new ArrayList<>())
@@ -3144,6 +3275,7 @@ public final class SignatureFrame extends JFrame {
                 return;
             }
 
+            rememberPlacements();
             SignatureService.PdfVisibleSignaturePlacement removedPlacement =
                     confirmedOnPage.remove(confirmedOnPage.size() - 1);
             previewPlacements.get(currentFile).put(pageIndex, removedPlacement);
@@ -3164,6 +3296,7 @@ public final class SignatureFrame extends JFrame {
             Map<Integer, SignatureService.PdfVisibleSignaturePlacement> previewByPage = previewPlacements.get(currentFile);
             Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> confirmedByPage = confirmedPlacements.get(currentFile);
 
+            rememberPlacements();
             confirmedByPage.clear();
             for (int pageIndex = 0; pageIndex < context.getPageCount(); pageIndex++) {
                 SignatureService.PdfVisibleSignaturePlacement pagePlacement = pageIndex == anchorPageIndex
@@ -3192,16 +3325,12 @@ public final class SignatureFrame extends JFrame {
         }
 
         private void confirmAndStartSigning() {
-            Map<Path, Path> outputTargets = resolveOutputTargets(files, outputDirectory, SigningModeOption.PDF);
-            if (outputTargets == null) {
-                return;
-            }
-
             Map<Path, PdfSigningPlan> pdfPlans = new LinkedHashMap<>();
             for (Path file : files) {
                 Map<Integer, List<SignatureService.PdfVisibleSignaturePlacement>> confirmedByPage = confirmedPlacements.get(file);
                 if (confirmedByPage == null || confirmedByPage.isEmpty()) {
-                    showError("Conferma almeno una pagina firmata per ogni PDF prima di procedere.");
+                    documentTabs.setSelectedIndex(files.indexOf(file));
+                    JOptionPane.showMessageDialog(dialog, "Conferma una posizione in " + file.getFileName() + " prima di avviare la firma.");
                     return;
                 }
 
@@ -3217,6 +3346,8 @@ public final class SignatureFrame extends JFrame {
                 pdfPlans.put(file, new PdfSigningPlan(List.copyOf(placements)));
             }
 
+            OutputPlan outputTargets = resolveOutputTargets(files, outputDirectory, SigningModeOption.PDF);
+            if (outputTargets == null) return;
             dialog.dispose();
             startSigningProcess(
                     identity,
@@ -3304,7 +3435,10 @@ public final class SignatureFrame extends JFrame {
                         }
 
                         selectionRectangle = clampRectangleToImage(selectionRectangle, pageImage);
-                        updateCurrentPlacementFromDisplayRectangle(selectionRectangle);
+                        if (!selectionRectangle.equals(previousRectangle)) {
+                            rememberPlacements();
+                            updateCurrentPlacementFromDisplayRectangle(selectionRectangle);
+                        }
                         drawingSelection = false;
                         draggingSelection = false;
                         anchorPoint = null;
@@ -3587,12 +3721,6 @@ public final class SignatureFrame extends JFrame {
         icon.setForeground(ACCENT);
     }
 
-    private void styleLinkLabel(LinkLabel label) {
-        label.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        label.setForeground(ACCENT);
-        label.setToolTipText("Apri il selettore file");
-    }
-
     private void styleInput(JComponent component) {
         component.setFont(new Font("Segoe UI", Font.PLAIN, 14));
         component.setBackground(new Color(0, 0, 0, 0));
@@ -3639,10 +3767,11 @@ public final class SignatureFrame extends JFrame {
     }
 
     private void updateCertificateCountBadge(int count) {
+        certificateCountLabel.setToolTipText(null);
         if (count <= 0) {
-            certificateCountLabel.setText("Nessun certificato disponibile");
-            certificateCountLabel.setBackground(CERTIFICATE_BADGE_EMPTY);
-            certificateCountLabel.setForeground(Color.WHITE);
+            certificateCountLabel.setText("Per firmare, inserisci la smart card e premi Aggiorna certificati.");
+            certificateCountLabel.setBackground(CARD_BACKGROUND);
+            certificateCountLabel.setForeground(TEXT_PRIMARY);
             return;
         }
 
@@ -3934,25 +4063,6 @@ public final class SignatureFrame extends JFrame {
         icon.paintIcon(null, graphics, 0, 0);
         graphics.dispose();
         return image;
-    }
-
-    private static final class LinkLabel extends JLabel {
-        private final String plainText;
-
-        private LinkLabel(String text) {
-            this.plainText = text;
-            setOpaque(false);
-            setHorizontalAlignment(SwingConstants.CENTER);
-            setEnabled(true);
-        }
-
-        @Override
-        public void setEnabled(boolean enabled) {
-            super.setEnabled(enabled);
-            setCursor(Cursor.getPredefinedCursor(enabled ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
-            setForeground(enabled ? ACCENT : new Color(140, 143, 144));
-            setText(plainText);
-        }
     }
 
     private static final class AppScrollBarUI extends BasicScrollBarUI {
